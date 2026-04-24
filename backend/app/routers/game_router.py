@@ -3,7 +3,7 @@ from datetime import datetime
 from bson import ObjectId
 from fastapi import APIRouter, Body
 
-from app.database import games_collection
+from app.database import games_collection, scores_collection
 from app.services.grid_service import generate_grid, process_move
 from app.services.word_service import check_word
 
@@ -44,6 +44,7 @@ def process_game_move(data: dict = Body(...)):
 @router.post("/game/start")
 def start_game(data: dict = Body(...)):
     user_id = data["user_id"]
+    username = data.get("username", "unknown")
     grid_size = data["grid_size"]
 
     if grid_size == 6:
@@ -59,6 +60,7 @@ def start_game(data: dict = Body(...)):
 
     game = {
         "user_id": user_id,
+        "username": username,
         "grid_size": grid_size,
         "grid": grid,
         "move_count": move_count,
@@ -103,6 +105,7 @@ def play_move(data: dict = Body(...)):
     if result["valid"]:
         new_score = game["score"] + result["total_score"]
         new_grid = process_move(game["grid"], positions)
+        updated_found_words = game["found_words"] + [result["word"]]
 
         games_collection.update_one(
             {"_id": ObjectId(game_id)},
@@ -111,13 +114,28 @@ def play_move(data: dict = Body(...)):
                     "grid": new_grid,
                     "score": new_score,
                     "move_count": new_move_count,
-                    "status": "finished" if game_over else "active"
+                    "status": "finished" if game_over else "active",
+                    "finished_at": datetime.now() if game_over else None
                 },
                 "$push": {
                     "found_words": result["word"]
                 }
             }
         )
+
+        if game_over:
+            started_at = game.get("started_at", datetime.now())
+            duration_seconds = int((datetime.now() - started_at).total_seconds())
+
+            scores_collection.insert_one({
+                "user_id": game["user_id"],
+                "username": game.get("username", "unknown"),
+                "grid_size": game["grid_size"],
+                "total_score": new_score,
+                "word_count": len(updated_found_words),
+                "longest_word": max(updated_found_words, key=len),
+                "duration_seconds": duration_seconds
+            })
 
         return {
             "valid": True,
@@ -134,10 +152,25 @@ def play_move(data: dict = Body(...)):
         {
             "$set": {
                 "move_count": new_move_count,
-                "status": "finished" if game_over else "active"
+                "status": "finished" if game_over else "active",
+                "finished_at": datetime.now() if game_over else None
             }
         }
     )
+
+    if game_over:
+        started_at = game.get("started_at", datetime.now())
+        duration_seconds = int((datetime.now() - started_at).total_seconds())
+
+        scores_collection.insert_one({
+            "user_id": game["user_id"],
+            "username": game.get("username", "unknown"),
+            "grid_size": game["grid_size"],
+            "total_score": game["score"],
+            "word_count": len(game["found_words"]),
+            "longest_word": max(game["found_words"], key=len) if game["found_words"] else "",
+            "duration_seconds": duration_seconds
+        })
 
     return {
         "valid": False,
