@@ -23,3 +23,46 @@ def generate_grid(size: int):
         grid.append(row)
 
     return grid
+import random
+
+LETTERS = list("ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ")
+
+def drop_letters(grid):
+    size = len(grid)
+
+    for col in range(size):
+        empty_slots = []
+
+        for row in range(size - 1, -1, -1):
+            if grid[row][col] == "":
+                empty_slots.append(row)
+            elif empty_slots:
+                empty_row = empty_slots.pop(0)
+                grid[empty_row][col] = grid[row][col]
+                grid[row][col] = ""
+                empty_slots.append(row)
+
+    return grid
+
+
+def fill_empty(grid):
+    size = len(grid)
+
+    for row in range(size):
+        for col in range(size):
+            if grid[row][col] == "":
+                grid[row][col] = random.choice(LETTERS)
+
+    return grid
+
+
+def process_move(grid, positions):
+    # positions = [(row, col), ...]
+
+    for row, col in positions:
+        grid[row][col] = ""
+
+    grid = drop_letters(grid)
+    grid = fill_empty(grid)
+
+    return grid
