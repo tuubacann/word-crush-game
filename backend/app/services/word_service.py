@@ -29,6 +29,20 @@ def calculate_score(word: str):
 
     return total
 
+
+def find_combos(word: str):
+    combos = set()
+
+    for i in range(len(word)):
+        for j in range(i + 3, len(word) + 1):
+            sub_word = word[i:j]
+
+            if sub_word in SAMPLE_WORDS:
+                combos.add(sub_word)
+
+    return list(combos)
+
+
 def check_word(word: str):
     word = word.upper()
 
@@ -48,8 +62,19 @@ def check_word(word: str):
 
     score = calculate_score(word)
 
+    combos = find_combos(word)
+
+    combo_score = 0
+    for combo in combos:
+        combo_score += calculate_score(combo)
+
+    total_score = score + combo_score
+
     return {
         "valid": True,
         "word": word,
-        "score": score
+        "score": score,
+        "combos": combos,
+        "combo_score": combo_score,
+        "total_score": total_score
     }
