@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
+import { type Href, router, useFocusEffect } from 'expo-router';
 
 import { getGold } from '@/src/api/market';
 import { clearSession, loadSession } from '@/src/utils/storage';
@@ -78,6 +78,8 @@ export default function HomeScreen() {
     router.push('/edit-username');
   }
 
+  const newGamePath = '/new-game' as Href;
+
   async function onLogout() {
     await clearSession();
     router.replace('/onboarding');
@@ -105,7 +107,7 @@ export default function HomeScreen() {
         <Text style={styles.goldValue}>{gold ?? '--'}</Text>
       </View>
 
-      <Pressable style={styles.mainButton} onPress={() => goToComingSoon('New Game')}>
+      <Pressable style={styles.mainButton} onPress={() => router.push(newGamePath)}>
         <Text style={styles.mainButtonText}>New Game</Text>
       </Pressable>
 
