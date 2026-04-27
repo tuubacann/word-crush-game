@@ -10,3 +10,4 @@ users_collection = db["users"]
 scores_collection = db["scores"]
 market_collection = db["market"]
 games_collection = db["games"]
+
