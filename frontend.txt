@@ -1,0 +1,105 @@
+Word Crush – React Native Frontend Todo List
+
+## Project Setup
+Initialize Expo project (managed workflow)
+Set up folder structure (screens, components, utils, hooks, api)
+Install and configure React Navigation v6
+Install axios or set up a fetch wrapper with base URL pointing to localhost:8000
+Create api/ service layer (one file per domain: auth, scores, dictionary, market)
+Add loading & error state handling utility (for all API calls)
+
+## Onboarding & Auth
+Username entry screen on first launch
+POST /auth/register (or equivalent) with username on submit [API]
+Store returned user ID / token in AsyncStorage for session persistence
+On app open, check AsyncStorage — skip onboarding if session exists
+Editable username from top-left of home screen → PATCH /auth/user [API]
+
+## Home Screen
+Layout with 3 buttons: New Game, Score Table, Market
+Display username top-left (tappable to edit)
+Fetch and display current gold balance → GET /market/gold [API]
+
+## New Game Flow
+Grid size selection screen (6x6 Hard / 8x8 Medium / 10x10 Easy)
+Move count selection screen (15 / 20 / 25 based on level)
+Navigate to game screen passing grid size + move count as params
+
+## Grid & Letter Generation
+Render NxN grid of letter tiles
+Turkish frequency-based letter generation algorithm on the frontend (high/mid/low groups)
+After generating grid, validate at least 1 word exists using GET /dictionary/check?word= [API]
+Re-generate grid if no valid word found (controlled regeneration loop)
+Show available word count on game screen header (computed locally via dictionary checks)
+
+## Word Selection Mechanic
+Tap first letter to start selection, highlight it
+Drag across adjacent tiles (all 8 directions) using react-native-gesture-handler PanGestureHandler
+Prevent re-selecting already-selected tile
+Show selected letters as word preview at bottom of grid
+Enforce minimum word length of 3
+On finger-lift, trigger word validation
+
+## Word Validation & Scoring
+Call GET /dictionary/validate?word={word} on finger-lift [API]
+On valid word: explode tiles, deduct 1 move
+On invalid word: reset selection, deduct 1 move
+Calculate base word score locally using letter point table (A=1, B=3, C=4…)
+Combo mechanic: detect valid sub-words (≥3 letters, same order) — validate each via API [API]
+Add sub-word scores to total and show combo indicator (e.g. +4 combo!)
+Animate score addition to top score counter
+
+## Letter Explosion & Gravity
+Animate exploding tiles disappearing (react-native-reanimated)
+Tiles above fall down (gravity mechanic, reanimated)
+Generate new letters from top using Turkish frequency algorithm
+After new letters drop, recheck available word count via API [API]
+If 0 words left: auto-shuffle or controlled refill
+
+## Special Power Tiles
+4-letter word → last tile becomes Row Clearer (⇆)
+5-letter word → last tile becomes Area Bomb (✹)
+6-letter word → last tile becomes Column Clearer (⇅)
+7+ letter word → last tile becomes Mega Blast (✪, 2-cell radius)
+Using a special tile in a new word triggers its power effect
+Animate each special power effect
+
+## Joker System
+Fetch owned jokers from GET /market/inventory on game screen load [API]
+Show owned jokers in tray at bottom of game screen
+Implement each joker effect locally: Fish, Wheel, Lollipop Breaker, Free Swap, Shuffle, Party Booster
+On joker use, call POST /market/use-joker to sync with backend [API]
+Disable joker button if not owned or insufficient gold
+
+## Market Screen
+Market screen accessible from home
+Fetch gold balance → GET /market/gold [API]
+Fetch joker list with costs → GET /market/jokers [API]
+Buy button → POST /market/buy with joker ID, deduct gold on success [API]
+Disable buy button if gold insufficient (check locally before calling)
+Refresh gold and inventory after successful purchase
+
+## Score Table Screen
+Fetch summary stats → GET /scores/summary [API]
+Display: total games, highest score, avg score, total words, longest word, total time
+Fetch game history → GET /scores/history (sorted newest first) [API]
+Render each game card: number, date, grid size, score, words, longest word, duration
+
+## Game End Logic
+Auto-end game when moves reach 0
+POST /scores/save with final game result (score, words, grid, duration, date) [API]
+Navigate back to home after save
+Show exit confirmation dialog on back press
+'Yes' → POST /scores/save then go home, 'No' → resume game [API]
+
+## Polish & UX
+Smooth tile fall animations (react-native-reanimated)
+Word selection highlight/deselect animations
+Score pop-up animation on word completion
+Combo bonus indicator (e.g. '+4 combo!')
+Move counter visible and updates in real-time
+Show remaining moves warning when low (≤ 5)
+Show loading spinner during API calls (validation, save, market)
+Show error toast if API call fails (network error, timeout)
+
+frontend start: npx expo start -c --lan
