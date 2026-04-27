@@ -38,12 +38,26 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (!userId) {
-        return;
+      let isActive = true;
+
+      async function refresh() {
+        await bootstrap();
       }
 
-      fetchGold(userId);
-    }, [userId, fetchGold])
+      refresh().then(() => {
+        if (!isActive) {
+          return;
+        }
+
+        if (userId) {
+          fetchGold(userId);
+        }
+      });
+
+      return () => {
+        isActive = false;
+      };
+    }, [bootstrap, fetchGold, userId])
   );
 
   async function onRefresh() {
@@ -60,6 +74,10 @@ export default function HomeScreen() {
     Alert.alert('Next step', `${feature} screen is the next item we will build.`);
   }
 
+  function editUsername() {
+    router.push('/edit-username');
+  }
+
   async function onLogout() {
     await clearSession();
     router.replace('/onboarding');
@@ -72,7 +90,7 @@ export default function HomeScreen() {
       refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} />}
     >
       <View style={styles.headerRow}>
-        <Pressable onPress={() => goToComingSoon('Edit username')}>
+        <Pressable onPress={editUsername}>
           <Text style={styles.username}>{username || 'Player'}</Text>
           <Text style={styles.editHint}>Tap to edit username</Text>
         </Pressable>

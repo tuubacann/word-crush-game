@@ -14,6 +14,7 @@ export default function RootLayout() {
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ title: 'Welcome' }} />
         <Stack.Screen name="home" options={{ headerShown: false }} />
+        <Stack.Screen name="edit-username" options={{ presentation: 'modal', title: 'Edit Username' }} />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>
