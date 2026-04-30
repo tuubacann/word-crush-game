@@ -1,3 +1,5 @@
+from app.database import words_collection
+
 LETTER_SCORES = {
     "A": 1, "B": 3, "C": 4, "Ç": 4, "D": 3, "E": 1,
     "F": 7, "G": 5, "Ğ": 8, "H": 5, "I": 2, "İ": 1,
@@ -6,20 +8,10 @@ LETTER_SCORES = {
     "U": 2, "Ü": 3, "V": 7, "Y": 3, "Z": 4
 }
 
-SAMPLE_WORDS = {
-    "KELİME",
-    "SORU",
-    "SARI",
-    "ARI",
-    "MASA",
-    "MASAL",
-    "ASA",
-    "SAL",
-    "ADANA",
-    "DANA",
-    "ANA",
-    "ADA"
-}
+
+def normalize_word(word: str):
+    return word.strip().upper()
+
 
 def calculate_score(word: str):
     total = 0
@@ -30,6 +22,10 @@ def calculate_score(word: str):
     return total
 
 
+def word_exists(word: str):
+    return words_collection.find_one({"word": word}) is not None
+
+
 def find_combos(word: str):
     combos = set()
 
@@ -37,31 +33,36 @@ def find_combos(word: str):
         for j in range(i + 3, len(word) + 1):
             sub_word = word[i:j]
 
-            if sub_word in SAMPLE_WORDS:
+            if sub_word != word and word_exists(sub_word):
                 combos.add(sub_word)
 
     return list(combos)
 
 
 def check_word(word: str):
-    word = word.upper()
+    word = normalize_word(word)
 
     if len(word) < 3:
         return {
             "valid": False,
             "message": "Word must be at least 3 letters",
-            "score": 0
+            "score": 0,
+            "combos": [],
+            "combo_score": 0,
+            "total_score": 0
         }
 
-    if word not in SAMPLE_WORDS:
+    if not word_exists(word):
         return {
             "valid": False,
             "message": "Word not found in dictionary",
-            "score": 0
+            "score": 0,
+            "combos": [],
+            "combo_score": 0,
+            "total_score": 0
         }
 
     score = calculate_score(word)
-
     combos = find_combos(word)
 
     combo_score = 0
@@ -72,6 +73,7 @@ def check_word(word: str):
 
     return {
         "valid": True,
+        "message": "Word accepted",
         "word": word,
         "score": score,
         "combos": combos,

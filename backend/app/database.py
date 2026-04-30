@@ -10,4 +10,8 @@ users_collection = db["users"]
 scores_collection = db["scores"]
 market_collection = db["market"]
 games_collection = db["games"]
+words_collection = db["words"]
 
+words_collection.create_index("word")
+scores_collection.create_index("user_id")
+games_collection.create_index("user_id")

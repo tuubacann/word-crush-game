@@ -3,6 +3,7 @@ from app.database import scores_collection
 
 router = APIRouter()
 
+
 @router.post("/scores")
 def save_score(data: dict = Body(...)):
     score = {
@@ -12,6 +13,7 @@ def save_score(data: dict = Body(...)):
         "total_score": data["total_score"],
         "word_count": data["word_count"],
         "longest_word": data["longest_word"],
+        "longest_word_score": data.get("longest_word_score", 0),
         "duration_seconds": data["duration_seconds"]
     }
 
@@ -31,6 +33,8 @@ def get_user_scores(user_id: str):
     ))
 
     return scores
+
+
 @router.get("/scores/{user_id}/summary")
 def get_score_summary(user_id: str):
     scores = list(scores_collection.find(
@@ -45,19 +49,26 @@ def get_score_summary(user_id: str):
             "average_score": 0,
             "total_words": 0,
             "longest_word": "",
+            "longest_word_score": 0,
             "total_duration_seconds": 0
         }
 
     total_games = len(scores)
-    highest_score = max(score["total_score"] for score in scores)
-    average_score = sum(score["total_score"] for score in scores) / total_games
-    total_words = sum(score["word_count"] for score in scores)
-    total_duration_seconds = sum(score["duration_seconds"] for score in scores)
+    highest_score = max(score.get("total_score", 0) for score in scores)
+    average_score = sum(score.get("total_score", 0) for score in scores) / total_games
+    total_words = sum(score.get("word_count", 0) for score in scores)
+    total_duration_seconds = sum(score.get("duration_seconds", 0) for score in scores)
 
-    longest_word = max(
+    best_score_item = max(
         scores,
-        key=lambda score: len(score["longest_word"])
-    )["longest_word"]
+        key=lambda score: (
+            len(score.get("longest_word", "")),
+            score.get("longest_word_score", 0)
+        )
+    )
+
+    longest_word = best_score_item.get("longest_word", "")
+    longest_word_score = best_score_item.get("longest_word_score", 0)
 
     return {
         "total_games": total_games,
@@ -65,16 +76,19 @@ def get_score_summary(user_id: str):
         "average_score": round(average_score, 2),
         "total_words": total_words,
         "longest_word": longest_word,
+        "longest_word_score": longest_word_score,
         "total_duration_seconds": total_duration_seconds
     }
+
+
 @router.get("/leaderboard")
 def get_leaderboard():
     scores = list(scores_collection.find({}, {"_id": 0}))
 
-    # Skora göre sırala (büyükten küçüğe)
-    scores = sorted(scores, key=lambda x: x["total_score"], reverse=True)
+    scores = sorted(
+        scores,
+        key=lambda score: score.get("total_score", 0),
+        reverse=True
+    )
 
-    # İlk 10
-    top_scores = scores[:10]
-
-    return top_scores
+    return scores[:10]

@@ -3,20 +3,61 @@ from datetime import datetime
 from bson import ObjectId
 from fastapi import APIRouter, Body
 
-from app.database import games_collection, scores_collection
-from app.services.grid_service import generate_grid, process_move
-from app.services.word_service import check_word
+from app.database import games_collection, scores_collection, users_collection
+from app.services.grid_service import (
+    generate_grid,
+    process_move,
+    find_words_on_grid,
+    create_special_power,
+    apply_joker,
+    apply_power
+)
+from app.services.word_service import check_word, calculate_score
 
 router = APIRouter()
+
+
+def get_best_longest_word(found_words):
+    if not found_words:
+        return {
+            "word": "",
+            "score": 0
+        }
+
+    normalized_words = []
+
+    for item in found_words:
+        if isinstance(item, dict):
+            word = item.get("word", "")
+            score = item.get("score", calculate_score(word))
+        else:
+            word = item
+            score = calculate_score(word)
+
+        normalized_words.append({
+            "word": word,
+            "score": score
+        })
+
+    return max(
+        normalized_words,
+        key=lambda item: (
+            len(item["word"]),
+            item["score"]
+        )
+    )
 
 
 @router.get("/game/grid")
 def get_grid(size: int = 8):
     grid = generate_grid(size)
+    possible_words = find_words_on_grid(grid)
 
     return {
         "size": size,
-        "grid": grid
+        "grid": grid,
+        "possible_word_count": len(possible_words),
+        "possible_words": possible_words
     }
 
 
@@ -34,10 +75,13 @@ def process_game_move(data: dict = Body(...)):
     positions = data["positions"]
 
     new_grid = process_move(grid, positions)
+    possible_words = find_words_on_grid(new_grid)
 
     return {
         "message": "Move processed",
-        "grid": new_grid
+        "grid": new_grid,
+        "possible_word_count": len(possible_words),
+        "possible_words": possible_words
     }
 
 
@@ -57,6 +101,7 @@ def start_game(data: dict = Body(...)):
         return {"message": "Invalid grid size"}
 
     grid = generate_grid(grid_size)
+    possible_words = find_words_on_grid(grid)
 
     game = {
         "user_id": user_id,
@@ -78,7 +123,9 @@ def start_game(data: dict = Body(...)):
         "grid_size": grid_size,
         "move_count": move_count,
         "score": 0,
-        "grid": grid
+        "grid": grid,
+        "possible_word_count": len(possible_words),
+        "possible_words": possible_words
     }
 
 
@@ -104,8 +151,16 @@ def play_move(data: dict = Body(...)):
 
     if result["valid"]:
         new_score = game["score"] + result["total_score"]
-        new_grid = process_move(game["grid"], positions)
-        updated_found_words = game["found_words"] + [result["word"]]
+        special_power = create_special_power(len(result["word"]))
+        new_grid = process_move(game["grid"], positions, special_power)
+
+        new_found_word = {
+            "word": result["word"],
+            "score": result["total_score"]
+        }
+
+        updated_found_words = game.get("found_words", []) + [new_found_word]
+        possible_words = find_words_on_grid(new_grid)
 
         games_collection.update_one(
             {"_id": ObjectId(game_id)},
@@ -118,7 +173,7 @@ def play_move(data: dict = Body(...)):
                     "finished_at": datetime.now() if game_over else None
                 },
                 "$push": {
-                    "found_words": result["word"]
+                    "found_words": new_found_word
                 }
             }
         )
@@ -126,6 +181,7 @@ def play_move(data: dict = Body(...)):
         if game_over:
             started_at = game.get("started_at", datetime.now())
             duration_seconds = int((datetime.now() - started_at).total_seconds())
+            best_word = get_best_longest_word(updated_found_words)
 
             scores_collection.insert_one({
                 "user_id": game["user_id"],
@@ -133,19 +189,29 @@ def play_move(data: dict = Body(...)):
                 "grid_size": game["grid_size"],
                 "total_score": new_score,
                 "word_count": len(updated_found_words),
-                "longest_word": max(updated_found_words, key=len),
+                "longest_word": best_word["word"],
+                "longest_word_score": best_word["score"],
                 "duration_seconds": duration_seconds
             })
 
         return {
             "valid": True,
+            "message": "Word accepted",
             "word": result["word"],
+            "word_score": result["score"],
+            "combos": result["combos"],
+            "combo_score": result["combo_score"],
             "score_added": result["total_score"],
             "total_score": new_score,
             "move_count": new_move_count,
             "game_over": game_over,
-            "grid": new_grid
+            "grid": new_grid,
+            "possible_word_count": len(possible_words),
+            "possible_words": possible_words,
+            "special_power_created": special_power
         }
+
+    possible_words = find_words_on_grid(game["grid"])
 
     games_collection.update_one(
         {"_id": ObjectId(game_id)},
@@ -161,21 +227,172 @@ def play_move(data: dict = Body(...)):
     if game_over:
         started_at = game.get("started_at", datetime.now())
         duration_seconds = int((datetime.now() - started_at).total_seconds())
+        found_words = game.get("found_words", [])
+        best_word = get_best_longest_word(found_words)
 
         scores_collection.insert_one({
             "user_id": game["user_id"],
             "username": game.get("username", "unknown"),
             "grid_size": game["grid_size"],
             "total_score": game["score"],
-            "word_count": len(game["found_words"]),
-            "longest_word": max(game["found_words"], key=len) if game["found_words"] else "",
+            "word_count": len(found_words),
+            "longest_word": best_word["word"],
+            "longest_word_score": best_word["score"],
             "duration_seconds": duration_seconds
         })
 
     return {
         "valid": False,
         "message": result["message"],
+        "score_added": 0,
+        "total_score": game["score"],
         "move_count": new_move_count,
         "game_over": game_over,
-        "grid": game["grid"]
+        "grid": game["grid"],
+        "possible_word_count": len(possible_words),
+        "possible_words": possible_words
+    }
+
+
+@router.post("/game/finish")
+def finish_game(data: dict = Body(...)):
+    game_id = data["game_id"]
+
+    game = games_collection.find_one({"_id": ObjectId(game_id)})
+
+    if not game:
+        return {"message": "Game not found"}
+
+    if game["status"] == "finished":
+        return {"message": "Game already finished"}
+
+    started_at = game.get("started_at", datetime.now())
+    duration_seconds = int((datetime.now() - started_at).total_seconds())
+
+    found_words = game.get("found_words", [])
+    best_word = get_best_longest_word(found_words)
+
+    scores_collection.insert_one({
+        "user_id": game["user_id"],
+        "username": game.get("username", "unknown"),
+        "grid_size": game["grid_size"],
+        "total_score": game["score"],
+        "word_count": len(found_words),
+        "longest_word": best_word["word"],
+        "longest_word_score": best_word["score"],
+        "duration_seconds": duration_seconds
+    })
+
+    games_collection.update_one(
+        {"_id": ObjectId(game_id)},
+        {
+            "$set": {
+                "status": "finished",
+                "finished_at": datetime.now()
+            }
+        }
+    )
+
+    return {
+        "message": "Game finished",
+        "game_over": True,
+        "total_score": game["score"],
+        "word_count": len(found_words),
+        "longest_word": best_word["word"],
+        "longest_word_score": best_word["score"],
+        "duration_seconds": duration_seconds
+    }
+
+
+@router.post("/game/use-joker")
+def use_joker(data: dict = Body(...)):
+    game_id = data["game_id"]
+    joker_id = data["joker_id"]
+    positions = data.get("positions", [])
+
+    game = games_collection.find_one({"_id": ObjectId(game_id)})
+
+    if not game:
+        return {"message": "Game not found"}
+
+    if game["status"] != "active":
+        return {"message": "Game is not active"}
+
+    user = users_collection.find_one({"_id": ObjectId(game["user_id"])})
+
+    if not user:
+        return {"message": "User not found"}
+
+    user_jokers = user.get("jokers", [])
+
+    if joker_id not in user_jokers:
+        return {"message": "User does not have this joker"}
+
+    new_grid = apply_joker(game["grid"], joker_id, positions)
+    possible_words = find_words_on_grid(new_grid)
+
+    games_collection.update_one(
+        {"_id": ObjectId(game_id)},
+        {
+            "$set": {
+                "grid": new_grid
+            }
+        }
+    )
+
+    users_collection.update_one(
+        {"_id": ObjectId(game["user_id"])},
+        {
+            "$pull": {
+                "jokers": joker_id
+            }
+        }
+    )
+
+    return {
+        "message": "Joker used",
+        "joker_id": joker_id,
+        "grid": new_grid,
+        "possible_word_count": len(possible_words),
+        "possible_words": possible_words
+    }
+
+
+@router.post("/game/use-power")
+def use_power(data: dict = Body(...)):
+    game_id = data["game_id"]
+    row = data["row"]
+    col = data["col"]
+
+    game = games_collection.find_one({"_id": ObjectId(game_id)})
+
+    if not game:
+        return {"message": "Game not found"}
+
+    if game["status"] != "active":
+        return {"message": "Game is not active"}
+
+    result = apply_power(game["grid"], row, col)
+
+    if not result["success"]:
+        return result
+
+    new_grid = result["grid"]
+    possible_words = find_words_on_grid(new_grid)
+
+    games_collection.update_one(
+        {"_id": ObjectId(game_id)},
+        {
+            "$set": {
+                "grid": new_grid
+            }
+        }
+    )
+
+    return {
+        "message": result["message"],
+        "power_type": result["power_type"],
+        "grid": new_grid,
+        "possible_word_count": len(possible_words),
+        "possible_words": possible_words
     }
