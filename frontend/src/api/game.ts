@@ -13,6 +13,15 @@ export type StartGameResponse = {
   move_count: number;
   score: number;
   grid: string[][];
+  possible_word_count?: number;
+  possible_words?: string[];
+};
+
+export type GridResponse = {
+  size: number;
+  grid: string[][];
+  possible_word_count?: number;
+  possible_words?: string[];
 };
 
 export async function startGame(payload: StartGamePayload): Promise<StartGameResponse> {
@@ -20,7 +29,7 @@ export async function startGame(payload: StartGamePayload): Promise<StartGameRes
   return response.data;
 }
 
-export async function getGrid(size: number) {
-  const response = await apiClient.get('/game/grid', { params: { size } });
+export async function getGrid(size: number): Promise<GridResponse> {
+  const response = await apiClient.get<GridResponse>('/game/grid', { params: { size } });
   return response.data;
 }
