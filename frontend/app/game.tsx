@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, Image } from 'react-native';
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, Image, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   GestureHandlerRootView,
@@ -8,7 +8,7 @@ import {
 } from 'react-native-gesture-handler';
 import Animated, { FadeInUp, ZoomOut, LinearTransition } from 'react-native-reanimated';
 
-import { getGrid, playMove, startGame, useJoker } from '../src/api/game';
+import { getGrid, playMove, startGame, useJoker, finishGame } from '../src/api/game';
 import { getInventory } from '../src/api/market';
 import { loadSession } from '../src/utils/storage';
 import { generateGrid, generateLetter } from '../src/utils/grid';
@@ -56,8 +56,8 @@ export default function GameScreen() {
 
   const tileSize = useMemo(() => {
     const screenWidth = Dimensions.get('window').width;
-    const horizontalPadding = 40;
-    const gap = 6;
+    const horizontalPadding = 80; 
+    const gap = 10; // Increased gap
     const totalGap = gap * (gridSize - 1);
     return Math.floor((screenWidth - horizontalPadding - totalGap) / gridSize);
   }, [gridSize]);
@@ -75,8 +75,8 @@ export default function GameScreen() {
   }
 
   function trySelectAt(x: number, y: number) {
-    const gap = 6;
-    const paddingHorizontal = 24;
+    const gap = 10;
+    const paddingHorizontal = 40; 
     const paddingVertical = 20;
 
     const localX = x - paddingHorizontal;
@@ -432,7 +432,8 @@ export default function GameScreen() {
         setErrorMessage(response.valid ? null : response.message ?? 'Word rejected.');
 
         if (response.game_over) {
-          router.replace('/results');
+          Alert.alert('Game Over', 'No more moves or possible words left! Your score has been saved.');
+          router.replace('/scores');
         }
 
       } catch {
@@ -443,6 +444,31 @@ export default function GameScreen() {
     }
 
     resetSelection();
+  }
+
+  function handleExit() {
+    Alert.alert(
+      'Exit Game',
+      'Are you sure you want to exit? Your score will be saved and the game will end.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Yes, Exit', 
+          style: 'destructive',
+          onPress: async () => {
+            if (gameId) {
+              try {
+                setIsLoading(true);
+                await finishGame(gameId);
+              } catch (err) {
+                console.error(err);
+              }
+            }
+            router.replace('/scores');
+          }
+        }
+      ]
+    );
   }
 
   // Count instances of each joker
@@ -528,9 +554,9 @@ export default function GameScreen() {
               <ActivityIndicator size="large" color="#365314" />
             </View>
           ) : (
-            <View style={{ flexDirection: 'row', gap: 6, justifyContent: 'center' }}>
+            <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'center' }}>
               {Array.from({ length: gridSize }).map((_, colIndex) => (
-                <View key={`col-${colIndex}`} style={{ flexDirection: 'column', gap: 6 }}>
+                <View key={`col-${colIndex}`} style={{ flexDirection: 'column', gap: 10 }}>
                   {grid.map((row, rowIndex) => {
                     const tileObj = grid[rowIndex][colIndex];
                     const isSelected = selectedPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
@@ -614,8 +640,8 @@ export default function GameScreen() {
         </Pressable>
         </View>
 
-        <Pressable style={styles.backButton} onPress={() => router.replace('/home')}>
-          <Text style={styles.backButtonText}>Back to Home</Text>
+        <Pressable style={styles.backButton} onPress={handleExit}>
+          <Text style={styles.backButtonText}>End Game & View Scores</Text>
         </Pressable>
       </ScrollView>
     </GestureHandlerRootView>
@@ -703,10 +729,11 @@ const styles = StyleSheet.create({
     marginTop: 2,
     borderRadius: 16,
     padding: 20,
-    paddingHorizontal: 24,
+    paddingHorizontal: 40,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    alignItems: 'center',
   },
   gridRow: {
     flexDirection: 'row',
