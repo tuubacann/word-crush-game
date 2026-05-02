@@ -133,6 +133,17 @@ def generate_grid(size: int):
 
     return generate_random_grid(size)
 
+def ensure_playable_grid(grid):
+    possible_words = find_words_on_grid(grid)
+
+    if len(possible_words) > 0:
+        return grid, possible_words
+
+    new_grid = generate_grid(len(grid))
+    possible_words = find_words_on_grid(new_grid)
+
+    return new_grid, possible_words
+
 
 def drop_letters(grid):
     size = len(grid)
