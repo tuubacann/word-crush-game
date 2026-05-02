@@ -115,7 +115,7 @@ export default function HomeScreen() {
         <Text style={styles.mainButtonText}>Score Table</Text>
       </Pressable>
 
-      <Pressable style={styles.mainButton} onPress={() => goToComingSoon('Market')}>
+      <Pressable style={styles.mainButton} onPress={() => router.push('/market')}>
         <Text style={styles.mainButtonText}>Market</Text>
       </Pressable>
     </ScrollView>

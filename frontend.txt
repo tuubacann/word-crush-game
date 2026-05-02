@@ -41,20 +41,19 @@ Enforce minimum word length of 3
 On finger-lift, trigger word validation
 
 ## Word Validation & Scoring
-Call GET /dictionary/validate?word={word} on finger-lift [API]
-On valid word: explode tiles, deduct 1 move
-On invalid word: reset selection, deduct 1 move
-Calculate base word score locally using letter point table (A=1, B=3, C=4…)
-Combo mechanic: detect valid sub-words (≥3 letters, same order) — validate each via API [API]
-Add sub-word scores to total and show combo indicator (e.g. +4 combo!)
+Call POST /game/move with game_id, letters, and positions on finger-lift [API]
+On valid word (valid: true): explode tiles, move_count is updated from response
+On invalid word (valid: false): reset selection, move_count is updated from response
+Read the score_added and total_score from the API response (score is calculated by the backend)
+Combo mechanic is handled by backend, show combo indicator if combos array is not empty
 Animate score addition to top score counter
 
 ## Letter Explosion & Gravity
 Animate exploding tiles disappearing (react-native-reanimated)
 Tiles above fall down (gravity mechanic, reanimated)
 Generate new letters from top using Turkish frequency algorithm
-After new letters drop, recheck available word count via API [API]
-If 0 words left: auto-shuffle or controlled refill
+After new letters drop, backend returns possible_word_count and possible_words in /game/move response
+If possible_word_count is 0, the game is over as there are no moves left
 
 ## Special Power Tiles
 4-letter word → last tile becomes Row Clearer (⇆)
@@ -86,11 +85,12 @@ Fetch game history → GET /scores/history (sorted newest first) [API]
 Render each game card: number, date, grid size, score, words, longest word, duration
 
 ## Game End Logic
-Auto-end game when moves reach 0
-POST /scores/save with final game result (score, words, grid, duration, date) [API]
-Navigate back to home after save
+Auto-end game when moves reach 0 OR when possible_word_count is 0 (handled by backend game_over flag)
+Backend automatically saves the score when game_over is true during /game/move
+If exiting early via back press, call POST /game/finish to finalize the game [API]
+Navigate back to home
 Show exit confirmation dialog on back press
-'Yes' → POST /scores/save then go home, 'No' → resume game [API]
+'Yes' → POST /game/finish then go home, 'No' → resume game [API]
 
 ## Polish & UX
 Smooth tile fall animations (react-native-reanimated)
