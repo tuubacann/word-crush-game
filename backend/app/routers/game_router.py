@@ -8,6 +8,7 @@ from app.services.grid_service import (
     generate_grid,
     process_move,
     find_words_on_grid,
+    ensure_playable_grid,
     create_special_power,
     apply_joker,
     apply_power
@@ -50,12 +51,8 @@ def get_best_longest_word(found_words):
 
 @router.get("/game/grid")
 def get_grid(size: int):
-    while True:
-        grid = generate_grid(size)
-        possible_words = find_words_on_grid(grid)
-
-        if len(possible_words) > 0:
-            break
+    grid = generate_grid(size)
+    grid, possible_words = ensure_playable_grid(grid)
 
     return {
         "size": size,
@@ -79,7 +76,7 @@ def process_game_move(data: dict = Body(...)):
     positions = data["positions"]
 
     new_grid = process_move(grid, positions)
-    possible_words = find_words_on_grid(new_grid)
+    new_grid, possible_words = ensure_playable_grid(new_grid)
 
     return {
         "message": "Move processed",
@@ -105,7 +102,7 @@ def start_game(data: dict = Body(...)):
         return {"message": "Invalid grid size"}
 
     grid = generate_grid(grid_size)
-    possible_words = find_words_on_grid(grid)
+    grid, possible_words = ensure_playable_grid(grid)
 
     game = {
         "user_id": user_id,
@@ -156,7 +153,9 @@ def play_move(data: dict = Body(...)):
     if result["valid"]:
         new_score = game["score"] + result["total_score"]
         special_power = create_special_power(len(result["word"]))
+
         new_grid = process_move(game["grid"], positions, special_power)
+        new_grid, possible_words = ensure_playable_grid(new_grid)
 
         new_found_word = {
             "word": result["word"],
@@ -164,7 +163,6 @@ def play_move(data: dict = Body(...)):
         }
 
         updated_found_words = game.get("found_words", []) + [new_found_word]
-        possible_words = find_words_on_grid(new_grid)
 
         games_collection.update_one(
             {"_id": ObjectId(game_id)},
@@ -215,12 +213,13 @@ def play_move(data: dict = Body(...)):
             "special_power_created": special_power
         }
 
-    possible_words = find_words_on_grid(game["grid"])
+    grid, possible_words = ensure_playable_grid(game["grid"])
 
     games_collection.update_one(
         {"_id": ObjectId(game_id)},
         {
             "$set": {
+                "grid": grid,
                 "move_count": new_move_count,
                 "status": "finished" if game_over else "active",
                 "finished_at": datetime.now() if game_over else None
@@ -252,7 +251,7 @@ def play_move(data: dict = Body(...)):
         "total_score": game["score"],
         "move_count": new_move_count,
         "game_over": game_over,
-        "grid": game["grid"],
+        "grid": grid,
         "possible_word_count": len(possible_words),
         "possible_words": possible_words
     }
@@ -333,7 +332,7 @@ def use_joker(data: dict = Body(...)):
         return {"message": "User does not have this joker"}
 
     new_grid = apply_joker(game["grid"], joker_id, positions)
-    possible_words = find_words_on_grid(new_grid)
+    new_grid, possible_words = ensure_playable_grid(new_grid)
 
     games_collection.update_one(
         {"_id": ObjectId(game_id)},
@@ -382,7 +381,7 @@ def use_power(data: dict = Body(...)):
         return result
 
     new_grid = result["grid"]
-    possible_words = find_words_on_grid(new_grid)
+    new_grid, possible_words = ensure_playable_grid(new_grid)
 
     games_collection.update_one(
         {"_id": ObjectId(game_id)},
