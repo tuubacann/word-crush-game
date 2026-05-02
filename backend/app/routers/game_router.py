@@ -49,9 +49,13 @@ def get_best_longest_word(found_words):
 
 
 @router.get("/game/grid")
-def get_grid(size: int = 8):
-    grid = generate_grid(size)
-    possible_words = find_words_on_grid(grid)
+def get_grid(size: int):
+    while True:
+        grid = generate_grid(size)
+        possible_words = find_words_on_grid(grid)
+
+        if len(possible_words) > 0:
+            break
 
     return {
         "size": size,
