@@ -60,3 +60,22 @@ export async function playMove(payload: PlayMovePayload): Promise<PlayMoveRespon
   const response = await apiClient.post<PlayMoveResponse>('/game/move', payload);
   return response.data;
 }
+
+export type UseJokerPayload = {
+  game_id: string;
+  joker_id: string;
+  positions?: Array<[number, number]>;
+};
+
+export type UseJokerResponse = {
+  message: string;
+  joker_id: string;
+  grid: any[][];
+  possible_word_count: number;
+  possible_words: string[];
+};
+
+export async function useJoker(payload: UseJokerPayload): Promise<UseJokerResponse> {
+  const response = await apiClient.post<UseJokerResponse>('/game/use-joker', payload);
+  return response.data;
+}

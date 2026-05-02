@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, Image } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   GestureHandlerRootView,
@@ -8,9 +8,19 @@ import {
 } from 'react-native-gesture-handler';
 import Animated, { FadeInUp, ZoomOut, LinearTransition } from 'react-native-reanimated';
 
-import { getGrid, playMove, startGame } from '../src/api/game';
+import { getGrid, playMove, startGame, useJoker } from '../src/api/game';
+import { getInventory } from '../src/api/market';
 import { loadSession } from '../src/utils/storage';
 import { generateGrid, generateLetter } from '../src/utils/grid';
+
+const JOKER_IMAGES: Record<string, any> = {
+  fish: require('../assets/images/fish.png'),
+  wheel: require('../assets/images/wheel.png'),
+  lollipop: require('../assets/images/lollipop-breaker.png'),
+  swap: require('../assets/images/free-swap.png'),
+  shuffle: require('../assets/images/shuffle.png'),
+  party: require('../assets/images/party-booster.png'),
+};
 
 type TileObj = {
   id: string;
@@ -38,6 +48,11 @@ export default function GameScreen() {
   const [comboWords, setComboWords] = useState<string[]>([]);
   const [selectedPositions, setSelectedPositions] = useState<{ row: number; col: number }[]>([]);
   const [isSelecting, setIsSelecting] = useState(false);
+  
+  // Joker State
+  const [ownedJokers, setOwnedJokers] = useState<string[]>([]);
+  const [activeJoker, setActiveJoker] = useState<string | null>(null);
+  const [jokerPositions, setJokerPositions] = useState<{ row: number; col: number }[]>([]);
 
   const tileSize = useMemo(() => {
     const screenWidth = Dimensions.get('window').width;
@@ -86,6 +101,24 @@ export default function GameScreen() {
       return;
     }
 
+    if (activeJoker) {
+      if (jokerPositions.some(p => p.row === row && p.col === col)) return;
+
+      const isSwap = activeJoker === 'swap';
+      if (isSwap && jokerPositions.length === 1 && !isAdjacent(jokerPositions[0], { row, col })) {
+        return; // swap requires adjacent
+      }
+
+      const newPositions = [...jokerPositions, { row, col }];
+      setJokerPositions(newPositions);
+
+      const maxPositions = isSwap ? 2 : 1;
+      if (newPositions.length === maxPositions) {
+        applyJoker(activeJoker, newPositions);
+      }
+      return;
+    }
+
     if (isAlreadySelected(row, col)) {
       return;
     }
@@ -122,11 +155,14 @@ export default function GameScreen() {
           return;
         }
 
-        const response = await startGame({
-          user_id: session.userId,
-          username: session.username,
-          grid_size: gridSize,
-        });
+        const [response, inventory] = await Promise.all([
+          startGame({
+            user_id: session.userId,
+            username: session.username,
+            grid_size: gridSize,
+          }),
+          getInventory(session.userId)
+        ]);
 
         if (!isMounted) {
           return;
@@ -141,6 +177,7 @@ export default function GameScreen() {
         setScoreDelta(null);
         setComboScore(null);
         setComboWords([]);
+        setOwnedJokers(inventory);
       } catch {
         if (!isMounted) {
           return;
@@ -231,10 +268,95 @@ export default function GameScreen() {
     }
   }
 
+  async function handleJokerTap(jokerId: string) {
+    if (activeJoker === jokerId) {
+      setActiveJoker(null);
+      setJokerPositions([]);
+      return;
+    }
+    
+    if (['fish', 'shuffle', 'party'].includes(jokerId)) {
+      await applyJoker(jokerId, []);
+    } else {
+      setActiveJoker(jokerId);
+      setJokerPositions([]);
+    }
+  }
+
+  async function applyJoker(jokerId: string, positions: {row: number, col: number}[]) {
+    if (!gameId) return;
+    try {
+      setIsSubmitting(true);
+      
+      // For swap, aggressively swap locally first so Reanimated animates the movement
+      if (jokerId === 'swap' && positions.length === 2) {
+        setGrid(oldGrid => {
+          const newGrid = oldGrid.map(row => [...row]);
+          const t1 = newGrid[positions[0].row][positions[0].col];
+          const t2 = newGrid[positions[1].row][positions[1].col];
+          newGrid[positions[0].row][positions[0].col] = t2;
+          newGrid[positions[1].row][positions[1].col] = t1;
+          return newGrid;
+        });
+      }
+
+      const response = await useJoker({
+        game_id: gameId,
+        joker_id: jokerId,
+        positions: positions.map(p => [p.row, p.col])
+      });
+      
+      if (!response.grid) {
+        setErrorMessage(response.message || 'Joker failed on server');
+        setActiveJoker(null);
+        setJokerPositions([]);
+        setIsSubmitting(false);
+        // If swap was reverted locally, we might need to refresh, but let's just refresh to be safe
+        if (jokerId === 'swap') refreshFromApi();
+        return;
+      }
+
+      if (jokerId === 'lollipop') {
+        syncGrid(response.grid, [positions[0]]);
+      } else if (jokerId === 'wheel') {
+        const exploded: {row: number, col: number}[] = [];
+        for (let r = 0; r < gridSize; r++) exploded.push({ row: r, col: positions[0].col });
+        for (let c = 0; c < gridSize; c++) {
+          if (c !== positions[0].col) exploded.push({ row: positions[0].row, col: c });
+        }
+        syncGrid(response.grid, exploded);
+      } else if (jokerId === 'swap') {
+        syncGrid(response.grid, []); // IDs already swapped locally, just sync the letters
+      } else {
+        initGrid(response.grid); // For fish, shuffle, party - refresh all
+      }
+
+      setPossibleWordCount(response.possible_word_count);
+      setActiveJoker(null);
+      setJokerPositions([]);
+      
+      setOwnedJokers(prev => {
+        const idx = prev.indexOf(jokerId);
+        if (idx > -1) {
+          const newOwned = [...prev];
+          newOwned.splice(idx, 1);
+          return newOwned;
+        }
+        return prev;
+      });
+
+    } catch (err: any) {
+      setErrorMessage(err.message || `Failed to use joker: ${jokerId}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function submitSelection() {
+    if (activeJoker) return; // Ignore word selection if joker is active
+
     if (!gameId) {
       if (selectedPositions.length >= 3) {
-         // Local mock for testing animations
          const newGridStr: any[][] = grid.map(r => r.map(t => t.power ? { letter: t.letter, power: t.power } : t.letter));
          const size = gridSize;
          for (let c = 0; c < size; c++) {
@@ -255,6 +377,7 @@ export default function GameScreen() {
                }
             }
          }
+
          syncGrid(newGridStr, selectedPositions);
          setScore(s => s + (selectedPositions.length * 10));
          setLastWord(selectedWord);
@@ -263,123 +386,137 @@ export default function GameScreen() {
       return;
     }
 
-    if (selectedPositions.length < 3) {
-      setErrorMessage('Select at least 3 letters.');
-      resetSelection();
-      return;
-    }
-
-    if (isSubmitting) {
-      return;
-    }
-
-    try {
+    if (selectedPositions.length >= 3) {
       setIsSubmitting(true);
+      setErrorMessage(null);
+
       const letters = selectedPositions.map((pos) => grid[pos.row]?.[pos.col]?.letter ?? '');
-      const positions = selectedPositions.map((pos) => [pos.row, pos.col] as [number, number]);
-      const response = await playMove({
-        game_id: gameId,
-        letters,
-        positions,
-      });
+      const positions: Array<[number, number]> = selectedPositions.map((pos) => [pos.row, pos.col]);
 
-      if (response.grid) {
-        if (response.valid) {
-          syncGrid(response.grid, selectedPositions);
-        } else {
-          // On invalid move, preserve IDs so the board doesn't flash/animate unnecessarily
-          setGrid(old => old.map((r, rowIdx) => 
-            r.map((t, colIdx) => {
-              const item = response.grid![rowIdx]?.[colIdx];
-              if (!item) return t;
-              const isObj = typeof item === 'object' && item !== null;
-              return { 
-                ...t, 
-                letter: isObj ? item.letter : item,
-                power: isObj ? item.power : null
-              };
-            })
-          ));
+      try {
+        const response = await playMove({
+          game_id: gameId,
+          letters,
+          positions,
+        });
+
+        if (response.grid) {
+          if (response.valid) {
+            syncGrid(response.grid, selectedPositions);
+          } else {
+            setGrid(old => old.map((r, rowIdx) => 
+              r.map((t, colIdx) => {
+                const item = response.grid![rowIdx]?.[colIdx];
+                if (!item) return t;
+                const isObj = typeof item === 'object' && item !== null;
+                return { 
+                  ...t, 
+                  letter: isObj ? item.letter : item,
+                  power: isObj ? item.power : null
+                };
+              })
+            ));
+          }
         }
-      }
 
-      if (typeof response.total_score === 'number') {
-        setScore(response.total_score);
-      }
+        if (response.valid) {
+          setScore(response.total_score ?? score);
+          setMoveCount(response.move_count ?? moveCount);
+          setPossibleWordCount(response.possible_word_count ?? possibleWordCount);
+          setLastWord(response.word ?? null);
+          setScoreDelta(response.score_added ?? null);
+          setComboScore(response.combo_score ?? null);
+          setComboWords(response.combos ?? []);
+        }
 
-      if (typeof response.move_count === 'number') {
-        setMoveCount(response.move_count);
-      }
+        setErrorMessage(response.valid ? null : response.message ?? 'Word rejected.');
 
-      setPossibleWordCount(response.possible_word_count ?? null);
-      setLastWord(response.word ?? null);
-      setScoreDelta(typeof response.score_added === 'number' ? response.score_added : null);
-      setComboScore(typeof response.combo_score === 'number' ? response.combo_score : null);
-      setComboWords(response.combos ?? []);
-      setErrorMessage(response.valid ? null : response.message ?? 'Word rejected.');
-    } catch {
-      setErrorMessage('Could not validate the word.');
-    } finally {
-      setIsSubmitting(false);
-      resetSelection();
+        if (response.game_over) {
+          router.replace('/results');
+        }
+
+      } catch {
+        setErrorMessage('Could not validate the word.');
+      } finally {
+        setIsSubmitting(false);
+      }
     }
+
+    resetSelection();
   }
+
+  // Count instances of each joker
+  const ownedCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    ownedJokers.forEach(j => {
+      counts[j] = (counts[j] || 0) + 1;
+    });
+    return counts;
+  }, [ownedJokers]);
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Game</Text>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.title}>Word Crush</Text>
 
         <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.headerLabel}>Moves</Text>
-          <Text style={styles.headerValue}>{moveCount}</Text>
-        </View>
-        <View>
-          <Text style={styles.headerLabel}>Score</Text>
-          <Text style={styles.headerValue}>{score}</Text>
-        </View>
-        <View>
-          <Text style={styles.headerLabel}>Grid</Text>
-          <Text style={styles.headerValue}>{gridSize}x{gridSize}</Text>
-        </View>
-        <View>
-          <Text style={styles.headerLabel}>Words</Text>
-          <Text style={styles.headerValue}>{possibleWordCount ?? '--'}</Text>
-        </View>
+          <View>
+            <Text style={styles.headerLabel}>Score</Text>
+            <Text style={styles.headerValue}>{score}</Text>
+          </View>
+          <View>
+            <Text style={styles.headerLabel}>Moves Left</Text>
+            <Text style={styles.headerValue}>{moveCount}</Text>
+          </View>
+          <View>
+            <Text style={styles.headerLabel}>Possible Words</Text>
+            <Text style={styles.headerValue}>{possibleWordCount ?? '?'}</Text>
+          </View>
         </View>
 
-        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+        {errorMessage && <Text style={styles.errorText}>{errorMessage}</Text>}
 
-        <View style={styles.resultCard}>
-        <View style={styles.resultRow}>
-          <Text style={styles.resultLabel}>Last word</Text>
-          <Text style={styles.resultValue}>{lastWord ?? '--'}</Text>
-        </View>
-        <View style={styles.resultRow}>
-          <Text style={styles.resultLabel}>Score +</Text>
-          <Text style={styles.resultValue}>{scoreDelta ?? '--'}</Text>
-        </View>
-        <View style={styles.resultRow}>
-          <Text style={styles.resultLabel}>Combo +</Text>
-          <Text style={styles.resultValue}>{comboScore ?? '--'}</Text>
-        </View>
-        {comboWords.length > 0 ? (
-          <Text style={styles.comboText}>Combos: {comboWords.join(', ')}</Text>
-        ) : null}
-        </View>
+        {lastWord && (
+          <View style={styles.resultCard}>
+            <View style={styles.resultRow}>
+              <Text style={styles.resultLabel}>Word</Text>
+              <Text style={styles.resultValue}>{lastWord}</Text>
+            </View>
+            <View style={styles.resultRow}>
+              <Text style={styles.resultLabel}>Points</Text>
+              <Text style={[styles.resultValue, { color: '#059669' }]}>
+                +{scoreDelta}
+              </Text>
+            </View>
+            {comboWords.length > 0 && (
+              <Text style={styles.comboText}>
+                Combos: {comboWords.join(', ')} (+{comboScore})
+              </Text>
+            )}
+          </View>
+        )}
+
+        {activeJoker && (
+          <View style={{ marginTop: 12, backgroundColor: '#fbbf24', padding: 8, borderRadius: 8, alignItems: 'center' }}>
+            <Text style={{ fontWeight: '700', color: '#78350f' }}>
+              Joker active: Tap {activeJoker === 'swap' ? '2 adjacent tiles' : 'a tile'} to use {activeJoker}
+            </Text>
+          </View>
+        )}
 
         <PanGestureHandler
         onGestureEvent={(event) => {
-          const { x, y, state } = event.nativeEvent;
-          if (state === State.BEGAN || state === State.ACTIVE) {
-            if (!isSelecting) {
-              setIsSelecting(true);
-            }
-            trySelectAt(x, y);
-          }
+          if (activeJoker) return; // No dragging for joker selection
+          const { x, y } = event.nativeEvent;
+          trySelectAt(x, y);
         }}
         onHandlerStateChange={(event) => {
+          if (event.nativeEvent.state === State.BEGAN) {
+            if (activeJoker) {
+              const { x, y } = event.nativeEvent;
+              trySelectAt(x, y);
+            }
+          }
           if (event.nativeEvent.state === State.END) {
             submitSelection();
           }
@@ -397,6 +534,7 @@ export default function GameScreen() {
                   {grid.map((row, rowIndex) => {
                     const tileObj = grid[rowIndex][colIndex];
                     const isSelected = selectedPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
+                    const isJokerSelected = jokerPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
                     
                     const powerIcons: Record<string, string> = {
                       row_clear: '⇆',
@@ -415,9 +553,10 @@ export default function GameScreen() {
                           styles.tile,
                           { width: tileSize, height: tileSize },
                           isSelected ? styles.tileSelected : null,
+                          isJokerSelected ? { backgroundColor: '#3b82f6', borderColor: '#2563eb' } : null,
                         ]}
                       >
-                        <Text style={styles.tileText}>{tileObj.letter}</Text>
+                        <Text style={[styles.tileText, isJokerSelected ? {color: '#fff'} : null]}>{tileObj.letter}</Text>
                         {tileObj.power && (
                           <Text style={{ position: 'absolute', bottom: 2, right: 2, fontSize: 12, color: '#be123c', fontWeight: '800' }}>
                             {powerIcons[tileObj.power] ?? '*'}
@@ -436,6 +575,34 @@ export default function GameScreen() {
         <View style={styles.previewCard}>
         <Text style={styles.previewLabel}>Selected word</Text>
         <Text style={styles.previewValue}>{selectedWord || '--'}</Text>
+        </View>
+
+        {/* Joker Tray */}
+        <View style={styles.jokerTray}>
+          <Text style={styles.jokerTrayTitle}>Jokers</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingVertical: 8 }}>
+            {Object.keys(JOKER_IMAGES).map((jokerId) => {
+              const count = ownedCounts[jokerId] || 0;
+              const isActive = activeJoker === jokerId;
+              
+              return (
+                <Pressable 
+                  key={jokerId} 
+                  style={[
+                    styles.jokerButton, 
+                    count === 0 && styles.jokerButtonDisabled,
+                    isActive && styles.jokerButtonActive
+                  ]}
+                  onPress={() => count > 0 && handleJokerTap(jokerId)}
+                >
+                  <Image source={JOKER_IMAGES[jokerId]} style={styles.jokerIcon} />
+                  <View style={styles.jokerBadge}>
+                    <Text style={styles.jokerBadgeText}>{count}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
         </View>
 
         <View style={styles.buttonRow}>
@@ -586,6 +753,60 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     color: '#1f2937',
+  },
+  jokerTray: {
+    marginTop: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  jokerTrayTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#334155',
+    marginBottom: 4,
+  },
+  jokerButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  jokerButtonActive: {
+    borderColor: '#3b82f6',
+    backgroundColor: '#eff6ff',
+  },
+  jokerButtonDisabled: {
+    opacity: 0.5,
+  },
+  jokerIcon: {
+    width: 36,
+    height: 36,
+    resizeMode: 'contain',
+  },
+  jokerBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#be123c',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  jokerBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
   },
   buttonRow: {
     marginTop: 16,
