@@ -1,25 +1,41 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Dimensions, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   GestureHandlerRootView,
   PanGestureHandler,
   State,
 } from 'react-native-gesture-handler';
+import Animated, { FadeInUp, ZoomOut, LinearTransition } from 'react-native-reanimated';
 
-import { getGrid, startGame } from '../src/api/game';
+import { getGrid, playMove, startGame } from '../src/api/game';
 import { loadSession } from '../src/utils/storage';
-import { generateGrid } from '../src/utils/grid';
+import { generateGrid, generateLetter } from '../src/utils/grid';
+
+type TileObj = {
+  id: string;
+  letter: string;
+  power?: string | null;
+};
 
 export default function GameScreen() {
   const params = useLocalSearchParams<{ gridSize?: string; moveCount?: string }>();
   const gridSize = Number(params.gridSize ?? '8');
   const [moveCount, setMoveCount] = useState(Number(params.moveCount ?? '20'));
-  const [grid, setGrid] = useState<string[][]>(() => generateGrid(gridSize));
+  const [grid, setGrid] = useState<TileObj[][]>(() => {
+    const strGrid = generateGrid(gridSize);
+    return strGrid.map(row => row.map(letter => ({ id: Math.random().toString(), letter })));
+  });
   const [score, setScore] = useState(0);
   const [possibleWordCount, setPossibleWordCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [gameId, setGameId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [lastWord, setLastWord] = useState<string | null>(null);
+  const [scoreDelta, setScoreDelta] = useState<number | null>(null);
+  const [comboScore, setComboScore] = useState<number | null>(null);
+  const [comboWords, setComboWords] = useState<string[]>([]);
   const [selectedPositions, setSelectedPositions] = useState<{ row: number; col: number }[]>([]);
   const [isSelecting, setIsSelecting] = useState(false);
 
@@ -32,7 +48,7 @@ export default function GameScreen() {
   }, [gridSize]);
 
   const selectedWord = useMemo(() => {
-    return selectedPositions.map((pos) => grid[pos.row]?.[pos.col] ?? '').join('');
+    return selectedPositions.map((pos) => grid[pos.row]?.[pos.col]?.letter ?? '').join('');
   }, [grid, selectedPositions]);
 
   function isAdjacent(a: { row: number; col: number }, b: { row: number; col: number }) {
@@ -116,18 +132,28 @@ export default function GameScreen() {
           return;
         }
 
-        setGrid(response.grid);
+        initGrid(response.grid);
         setScore(response.score);
         setMoveCount(response.move_count);
         setPossibleWordCount(response.possible_word_count ?? null);
+        setGameId(response.game_id);
+        setLastWord(null);
+        setScoreDelta(null);
+        setComboScore(null);
+        setComboWords([]);
       } catch {
         if (!isMounted) {
           return;
         }
 
         setErrorMessage('Could not start a game from the server. Showing a mock grid.');
-        setGrid(generateGrid(gridSize));
+        initGrid(generateGrid(gridSize));
         setPossibleWordCount(null);
+        setGameId(null);
+        setLastWord(null);
+        setScoreDelta(null);
+        setComboScore(null);
+        setComboWords([]);
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -142,8 +168,51 @@ export default function GameScreen() {
     };
   }, [gridSize]);
 
+  function initGrid(newGridStr: any[][]) {
+    setGrid(newGridStr.map(row => row.map(item => {
+      const isObj = typeof item === 'object' && item !== null;
+      return { 
+        id: Math.random().toString(), 
+        letter: isObj ? item.letter : item,
+        power: isObj ? item.power : null
+      };
+    })));
+  }
+
+  function syncGrid(newGridStr: any[][], explodedPositions: {row: number, col: number}[]) {
+    setGrid((oldGrid) => {
+      const size = newGridStr.length;
+      const newGridObj: TileObj[][] = Array.from({length: size}, () => []);
+
+      for (let c = 0; c < size; c++) {
+        let survivors: TileObj[] = [];
+        for (let r = 0; r < size; r++) {
+          if (!explodedPositions.some(p => p.row === r && p.col === c)) {
+            survivors.push(oldGrid[r][c]);
+          }
+        }
+        
+        const newItemsCount = size - survivors.length;
+        for (let r = 0; r < size; r++) {
+          const item = newGridStr[r][c];
+          const isObj = typeof item === 'object' && item !== null;
+          const letterVal = isObj ? item.letter : item;
+          const powerVal = isObj ? item.power : null;
+
+          if (r < newItemsCount) {
+             newGridObj[r][c] = { id: Math.random().toString(), letter: letterVal, power: powerVal };
+          } else {
+             const survivor = survivors[r - newItemsCount];
+             newGridObj[r][c] = { ...survivor, letter: letterVal, power: powerVal };
+          }
+        }
+      }
+      return newGridObj;
+    });
+  }
+
   function regenerateGrid() {
-    setGrid(generateGrid(gridSize));
+    initGrid(generateGrid(gridSize));
     setPossibleWordCount(null);
     setErrorMessage('Mock grid regenerated locally.');
   }
@@ -153,7 +222,7 @@ export default function GameScreen() {
       setIsLoading(true);
       setErrorMessage(null);
       const response = await getGrid(gridSize);
-      setGrid(response.grid);
+      initGrid(response.grid);
       setPossibleWordCount(response.possible_word_count ?? null);
     } catch {
       setErrorMessage('Failed to refresh grid from the server.');
@@ -162,11 +231,106 @@ export default function GameScreen() {
     }
   }
 
+  async function submitSelection() {
+    if (!gameId) {
+      if (selectedPositions.length >= 3) {
+         // Local mock for testing animations
+         const newGridStr: any[][] = grid.map(r => r.map(t => t.power ? { letter: t.letter, power: t.power } : t.letter));
+         const size = gridSize;
+         for (let c = 0; c < size; c++) {
+            let emptySlots = 0;
+            for (let r = size - 1; r >= 0; r--) {
+               if (selectedPositions.some(p => p.row === r && p.col === c)) {
+                  emptySlots++;
+               } else if (emptySlots > 0) {
+                  newGridStr[r + emptySlots][c] = newGridStr[r][c];
+                  newGridStr[r][c] = '';
+               }
+            }
+         }
+         for (let c = 0; c < size; c++) {
+            for (let r = 0; r < size; r++) {
+               if (newGridStr[r][c] === '') {
+                  newGridStr[r][c] = generateLetter();
+               }
+            }
+         }
+         syncGrid(newGridStr, selectedPositions);
+         setScore(s => s + (selectedPositions.length * 10));
+         setLastWord(selectedWord);
+      }
+      resetSelection();
+      return;
+    }
+
+    if (selectedPositions.length < 3) {
+      setErrorMessage('Select at least 3 letters.');
+      resetSelection();
+      return;
+    }
+
+    if (isSubmitting) {
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      const letters = selectedPositions.map((pos) => grid[pos.row]?.[pos.col]?.letter ?? '');
+      const positions = selectedPositions.map((pos) => [pos.row, pos.col] as [number, number]);
+      const response = await playMove({
+        game_id: gameId,
+        letters,
+        positions,
+      });
+
+      if (response.grid) {
+        if (response.valid) {
+          syncGrid(response.grid, selectedPositions);
+        } else {
+          // On invalid move, preserve IDs so the board doesn't flash/animate unnecessarily
+          setGrid(old => old.map((r, rowIdx) => 
+            r.map((t, colIdx) => {
+              const item = response.grid![rowIdx]?.[colIdx];
+              if (!item) return t;
+              const isObj = typeof item === 'object' && item !== null;
+              return { 
+                ...t, 
+                letter: isObj ? item.letter : item,
+                power: isObj ? item.power : null
+              };
+            })
+          ));
+        }
+      }
+
+      if (typeof response.total_score === 'number') {
+        setScore(response.total_score);
+      }
+
+      if (typeof response.move_count === 'number') {
+        setMoveCount(response.move_count);
+      }
+
+      setPossibleWordCount(response.possible_word_count ?? null);
+      setLastWord(response.word ?? null);
+      setScoreDelta(typeof response.score_added === 'number' ? response.score_added : null);
+      setComboScore(typeof response.combo_score === 'number' ? response.combo_score : null);
+      setComboWords(response.combos ?? []);
+      setErrorMessage(response.valid ? null : response.message ?? 'Word rejected.');
+    } catch {
+      setErrorMessage('Could not validate the word.');
+    } finally {
+      setIsSubmitting(false);
+      resetSelection();
+    }
+  }
+
   return (
     <GestureHandlerRootView style={styles.container}>
-      <Text style={styles.title}>Game</Text>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Text style={styles.title}>Game</Text>
 
-      <View style={styles.headerRow}>
+        <View style={styles.headerRow}>
         <View>
           <Text style={styles.headerLabel}>Moves</Text>
           <Text style={styles.headerValue}>{moveCount}</Text>
@@ -183,11 +347,29 @@ export default function GameScreen() {
           <Text style={styles.headerLabel}>Words</Text>
           <Text style={styles.headerValue}>{possibleWordCount ?? '--'}</Text>
         </View>
-      </View>
+        </View>
 
-      {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
-      <PanGestureHandler
+        <View style={styles.resultCard}>
+        <View style={styles.resultRow}>
+          <Text style={styles.resultLabel}>Last word</Text>
+          <Text style={styles.resultValue}>{lastWord ?? '--'}</Text>
+        </View>
+        <View style={styles.resultRow}>
+          <Text style={styles.resultLabel}>Score +</Text>
+          <Text style={styles.resultValue}>{scoreDelta ?? '--'}</Text>
+        </View>
+        <View style={styles.resultRow}>
+          <Text style={styles.resultLabel}>Combo +</Text>
+          <Text style={styles.resultValue}>{comboScore ?? '--'}</Text>
+        </View>
+        {comboWords.length > 0 ? (
+          <Text style={styles.comboText}>Combos: {comboWords.join(', ')}</Text>
+        ) : null}
+        </View>
+
+        <PanGestureHandler
         onGestureEvent={(event) => {
           const { x, y, state } = event.nativeEvent;
           if (state === State.BEGAN || state === State.ACTIVE) {
@@ -199,14 +381,7 @@ export default function GameScreen() {
         }}
         onHandlerStateChange={(event) => {
           if (event.nativeEvent.state === State.END) {
-            if (selectedPositions.length < 3) {
-              setErrorMessage('Select at least 3 letters.');
-              resetSelection();
-              return;
-            }
-
-            setErrorMessage(null);
-            resetSelection();
+            submitSelection();
           }
         }}
       >
@@ -216,45 +391,66 @@ export default function GameScreen() {
               <ActivityIndicator size="large" color="#365314" />
             </View>
           ) : (
-            grid.map((row, rowIndex) => (
-              <View key={`row-${rowIndex}`} style={[styles.gridRow, { gap: 6 }]}>
-                {row.map((letter, colIndex) => (
-                  <View
-                    key={`tile-${rowIndex}-${colIndex}`}
-                    style={[
-                      styles.tile,
-                      { width: tileSize, height: tileSize },
-                      selectedPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex)
-                        ? styles.tileSelected
-                        : null,
-                    ]}
-                  >
-                    <Text style={styles.tileText}>{letter}</Text>
-                  </View>
-                ))}
-              </View>
-            ))
+            <View style={{ flexDirection: 'row', gap: 6, justifyContent: 'center' }}>
+              {Array.from({ length: gridSize }).map((_, colIndex) => (
+                <View key={`col-${colIndex}`} style={{ flexDirection: 'column', gap: 6 }}>
+                  {grid.map((row, rowIndex) => {
+                    const tileObj = grid[rowIndex][colIndex];
+                    const isSelected = selectedPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
+                    
+                    const powerIcons: Record<string, string> = {
+                      row_clear: '⇆',
+                      area_bomb: '✹',
+                      column_clear: '⇅',
+                      mega_bomb: '✪'
+                    };
+
+                    return (
+                      <Animated.View
+                        key={tileObj.id}
+                        layout={LinearTransition.springify().damping(16).stiffness(150)}
+                        entering={FadeInUp.springify()}
+                        exiting={ZoomOut}
+                        style={[
+                          styles.tile,
+                          { width: tileSize, height: tileSize },
+                          isSelected ? styles.tileSelected : null,
+                        ]}
+                      >
+                        <Text style={styles.tileText}>{tileObj.letter}</Text>
+                        {tileObj.power && (
+                          <Text style={{ position: 'absolute', bottom: 2, right: 2, fontSize: 12, color: '#be123c', fontWeight: '800' }}>
+                            {powerIcons[tileObj.power] ?? '*'}
+                          </Text>
+                        )}
+                      </Animated.View>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
           )}
         </View>
       </PanGestureHandler>
 
-      <View style={styles.previewCard}>
+        <View style={styles.previewCard}>
         <Text style={styles.previewLabel}>Selected word</Text>
         <Text style={styles.previewValue}>{selectedWord || '--'}</Text>
-      </View>
+        </View>
 
-      <View style={styles.buttonRow}>
+        <View style={styles.buttonRow}>
         <Pressable style={styles.secondaryButton} onPress={regenerateGrid}>
           <Text style={styles.secondaryButtonText}>Mock regenerate</Text>
         </Pressable>
         <Pressable style={styles.primaryOutlineButton} onPress={refreshFromApi}>
           <Text style={styles.primaryOutlineText}>Refresh from API</Text>
         </Pressable>
-      </View>
+        </View>
 
-      <Pressable style={styles.backButton} onPress={() => router.replace('/home')}>
-        <Text style={styles.backButtonText}>Back to Home</Text>
-      </Pressable>
+        <Pressable style={styles.backButton} onPress={() => router.replace('/home')}>
+          <Text style={styles.backButtonText}>Back to Home</Text>
+        </Pressable>
+      </ScrollView>
     </GestureHandlerRootView>
   );
 }
@@ -263,7 +459,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fefce8',
+  },
+  content: {
     padding: 20,
+    paddingBottom: 40,
   },
   title: {
     marginTop: 12,
@@ -297,9 +496,44 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#b91c1c',
     fontWeight: '700',
+    textAlign: 'center',
+  },
+  resultCard: {
+    marginTop: 2,
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  resultRow: {
+    minWidth: 90,
+    alignItems: 'flex-start',
+  },
+  resultLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '700',
+  },
+  resultValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1f2937',
+  },
+  comboText: {
+    marginTop: 4,
+    width: '100%',
+    fontSize: 12,
+    color: '#0f766e',
+    fontWeight: '700',
   },
   gridCard: {
-    marginTop: 24,
+    marginTop: 2,
     borderRadius: 16,
     padding: 20,
     paddingHorizontal: 24,
@@ -335,7 +569,7 @@ const styles = StyleSheet.create({
     color: '#713f12',
   },
   previewCard: {
-    marginTop: 16,
+    marginTop: 2,
     borderRadius: 14,
     padding: 12,
     backgroundColor: '#ffffff',

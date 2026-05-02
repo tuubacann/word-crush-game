@@ -47,7 +47,23 @@ export function generateLetter(): string {
 }
 
 export function generateGrid(size: number): string[][] {
-  return Array.from({ length: size }, () =>
+  const grid =  Array.from({ length: size }, () =>
     Array.from({ length: size }, () => generateLetter())
   );
+
+  // Hardcode some valid Turkish words for testing animations locally
+  if (size >= 6) {
+    const words = ["ELMA", "ARMUT", "ARABA", "KEDİ"];
+    let r = 1;
+    for (const word of words) {
+      if (r < size - 1) {
+         for (let c = 0; c < word.length && c < size; c++) {
+           grid[r][c] = word[c];
+         }
+         r += 2;
+      }
+    }
+  }
+
+  return grid;
 }
