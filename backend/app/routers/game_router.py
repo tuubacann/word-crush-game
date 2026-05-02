@@ -343,11 +343,14 @@ def use_joker(data: dict = Body(...)):
         }
     )
 
+
+    user_jokers.remove(joker_id)
+
     users_collection.update_one(
         {"_id": ObjectId(game["user_id"])},
         {
-            "$pull": {
-                "jokers": joker_id
+            "$set": {
+                "jokers": user_jokers
             }
         }
     )
