@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, Image } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, Image, Alert, BackHandler } from 'react-native';
+import { router, useLocalSearchParams, useNavigation, Stack } from 'expo-router';
 import {
   GestureHandlerRootView,
   PanGestureHandler,
   State,
 } from 'react-native-gesture-handler';
-import Animated, { FadeInUp, ZoomOut, LinearTransition } from 'react-native-reanimated';
+import Animated, { FadeInUp, ZoomOut, LinearTransition, withSpring, useAnimatedStyle } from 'react-native-reanimated';
 
-import { getGrid, playMove, startGame, useJoker } from '../src/api/game';
+import { getGrid, playMove, startGame, useJoker, finishGame } from '../src/api/game';
 import { getInventory } from '../src/api/market';
 import { loadSession } from '../src/utils/storage';
 import { generateGrid, generateLetter } from '../src/utils/grid';
@@ -54,10 +54,12 @@ export default function GameScreen() {
   const [activeJoker, setActiveJoker] = useState<string | null>(null);
   const [jokerPositions, setJokerPositions] = useState<{ row: number; col: number }[]>([]);
 
+  const navigation = useNavigation();
+
   const tileSize = useMemo(() => {
     const screenWidth = Dimensions.get('window').width;
-    const horizontalPadding = 40;
-    const gap = 6;
+    const horizontalPadding = 80; 
+    const gap = 10; // Increased gap
     const totalGap = gap * (gridSize - 1);
     return Math.floor((screenWidth - horizontalPadding - totalGap) / gridSize);
   }, [gridSize]);
@@ -75,8 +77,8 @@ export default function GameScreen() {
   }
 
   function trySelectAt(x: number, y: number) {
-    const gap = 6;
-    const paddingHorizontal = 24;
+    const gap = 10;
+    const paddingHorizontal = 40; 
     const paddingVertical = 20;
 
     const localX = x - paddingHorizontal;
@@ -419,10 +421,15 @@ export default function GameScreen() {
           }
         }
 
+        if (response.move_count !== undefined) {
+          setMoveCount(response.move_count);
+        }
+        if (response.possible_word_count !== undefined) {
+          setPossibleWordCount(response.possible_word_count);
+        }
+
         if (response.valid) {
           setScore(response.total_score ?? score);
-          setMoveCount(response.move_count ?? moveCount);
-          setPossibleWordCount(response.possible_word_count ?? possibleWordCount);
           setLastWord(response.word ?? null);
           setScoreDelta(response.score_added ?? null);
           setComboScore(response.combo_score ?? null);
@@ -432,7 +439,8 @@ export default function GameScreen() {
         setErrorMessage(response.valid ? null : response.message ?? 'Word rejected.');
 
         if (response.game_over) {
-          router.replace('/results');
+          Alert.alert('Game Over', 'No more moves or possible words left! Your score has been saved.');
+          router.replace('/home');
         }
 
       } catch {
@@ -445,6 +453,42 @@ export default function GameScreen() {
     resetSelection();
   }
 
+  const handleExit = useCallback(() => {
+    Alert.alert(
+      'Exit Game',
+      'Are you sure you want to exit? Your score will be saved and the game will end.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Yes, Exit', 
+          style: 'destructive',
+          onPress: async () => {
+            if (gameId) {
+              try {
+                setIsLoading(true);
+                await finishGame(gameId);
+              } catch (err) {
+                console.error(err);
+              }
+            }
+            router.replace('/home');
+          }
+        }
+      ]
+    );
+  }, [gameId]);
+
+  useEffect(() => {
+    const onBackPress = () => {
+      handleExit();
+      return true; // true prevents the default back action
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+    return () => subscription.remove();
+  }, [handleExit]);
+
   // Count instances of each joker
   const ownedCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -456,6 +500,16 @@ export default function GameScreen() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
+      <Stack.Screen 
+        options={{
+          headerLeft: () => (
+            <Pressable onPress={handleExit} style={{ paddingRight: 16 }}>
+              <Text style={{ color: '#15803d', fontSize: 16, fontWeight: '700' }}>Back</Text>
+            </Pressable>
+          ),
+          gestureEnabled: false,
+        }} 
+      />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Word Crush</Text>
 
@@ -477,7 +531,7 @@ export default function GameScreen() {
         {errorMessage && <Text style={styles.errorText}>{errorMessage}</Text>}
 
         {lastWord && (
-          <View style={styles.resultCard}>
+          <Animated.View key={`result-${moveCount}`} entering={FadeInUp.springify()} style={styles.resultCard}>
             <View style={styles.resultRow}>
               <Text style={styles.resultLabel}>Word</Text>
               <Text style={styles.resultValue}>{lastWord}</Text>
@@ -493,7 +547,7 @@ export default function GameScreen() {
                 Combos: {comboWords.join(', ')} (+{comboScore})
               </Text>
             )}
-          </View>
+          </Animated.View>
         )}
 
         {activeJoker && (
@@ -528,41 +582,22 @@ export default function GameScreen() {
               <ActivityIndicator size="large" color="#365314" />
             </View>
           ) : (
-            <View style={{ flexDirection: 'row', gap: 6, justifyContent: 'center' }}>
+            <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'center' }}>
               {Array.from({ length: gridSize }).map((_, colIndex) => (
-                <View key={`col-${colIndex}`} style={{ flexDirection: 'column', gap: 6 }}>
+                <View key={`col-${colIndex}`} style={{ flexDirection: 'column', gap: 10 }}>
                   {grid.map((row, rowIndex) => {
                     const tileObj = grid[rowIndex][colIndex];
                     const isSelected = selectedPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
                     const isJokerSelected = jokerPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
                     
-                    const powerIcons: Record<string, string> = {
-                      row_clear: '⇆',
-                      area_bomb: '✹',
-                      column_clear: '⇅',
-                      mega_bomb: '✪'
-                    };
-
                     return (
-                      <Animated.View
+                      <Tile 
                         key={tileObj.id}
-                        layout={LinearTransition.springify().damping(16).stiffness(150)}
-                        entering={FadeInUp.springify()}
-                        exiting={ZoomOut}
-                        style={[
-                          styles.tile,
-                          { width: tileSize, height: tileSize },
-                          isSelected ? styles.tileSelected : null,
-                          isJokerSelected ? { backgroundColor: '#3b82f6', borderColor: '#2563eb' } : null,
-                        ]}
-                      >
-                        <Text style={[styles.tileText, isJokerSelected ? {color: '#fff'} : null]}>{tileObj.letter}</Text>
-                        {tileObj.power && (
-                          <Text style={{ position: 'absolute', bottom: 2, right: 2, fontSize: 12, color: '#be123c', fontWeight: '800' }}>
-                            {powerIcons[tileObj.power] ?? '*'}
-                          </Text>
-                        )}
-                      </Animated.View>
+                        tileObj={tileObj}
+                        isSelected={isSelected}
+                        isJokerSelected={isJokerSelected}
+                        tileSize={tileSize}
+                      />
                     );
                   })}
                 </View>
@@ -614,8 +649,8 @@ export default function GameScreen() {
         </Pressable>
         </View>
 
-        <Pressable style={styles.backButton} onPress={() => router.replace('/home')}>
-          <Text style={styles.backButtonText}>Back to Home</Text>
+        <Pressable style={styles.backButton} onPress={handleExit}>
+          <Text style={styles.backButtonText}>End Game & View Scores</Text>
         </Pressable>
       </ScrollView>
     </GestureHandlerRootView>
@@ -703,10 +738,11 @@ const styles = StyleSheet.create({
     marginTop: 2,
     borderRadius: 16,
     padding: 20,
-    paddingHorizontal: 24,
+    paddingHorizontal: 40,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    alignItems: 'center',
   },
   gridRow: {
     flexDirection: 'row',
@@ -854,3 +890,51 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 });
+
+type TileProps = {
+  tileObj: TileObj;
+  isSelected: boolean;
+  isJokerSelected: boolean;
+  tileSize: number;
+};
+
+function Tile({ tileObj, isSelected, isJokerSelected, tileSize }: TileProps) {
+  const powerIcons: Record<string, string> = {
+    row_clear: '⇆',
+    area_bomb: '✹',
+    column_clear: '⇅',
+    mega_bomb: '✪'
+  };
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: withSpring(isSelected ? 1.05 : 1) }]
+    };
+  }, [isSelected]);
+
+  return (
+    <Animated.View
+      layout={LinearTransition.springify().damping(16).stiffness(150)}
+      entering={FadeInUp.springify()}
+      exiting={ZoomOut}
+      style={{ width: tileSize, height: tileSize }}
+    >
+      <Animated.View
+        style={[
+          styles.tile,
+          { width: '100%', height: '100%' },
+          isSelected ? styles.tileSelected : null,
+          isJokerSelected ? { backgroundColor: '#3b82f6', borderColor: '#2563eb' } : null,
+          animatedStyle,
+        ]}
+      >
+        <Text style={[styles.tileText, isJokerSelected ? {color: '#fff'} : null]}>{tileObj.letter}</Text>
+        {tileObj.power && (
+          <Text style={{ position: 'absolute', bottom: 2, right: 2, fontSize: 12, color: '#be123c', fontWeight: '800' }}>
+            {powerIcons[tileObj.power] ?? '*'}
+          </Text>
+        )}
+      </Animated.View>
+    </Animated.View>
+  );
+}

@@ -111,7 +111,7 @@ export default function HomeScreen() {
         <Text style={styles.mainButtonText}>New Game</Text>
       </Pressable>
 
-      <Pressable style={styles.mainButton} onPress={() => goToComingSoon('Score Table')}>
+      <Pressable style={styles.mainButton} onPress={() => router.push('/scores')}>
         <Text style={styles.mainButtonText}>Score Table</Text>
       </Pressable>
 

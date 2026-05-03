@@ -79,3 +79,9 @@ export async function useJoker(payload: UseJokerPayload): Promise<UseJokerRespon
   const response = await apiClient.post<UseJokerResponse>('/game/use-joker', payload);
   return response.data;
 }
+
+export async function finishGame(gameId: string) {
+  const response = await apiClient.post('/game/finish', { game_id: gameId });
+  return response.data;
+}
+
