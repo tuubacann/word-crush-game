@@ -8,7 +8,7 @@ import {
 } from 'react-native-gesture-handler';
 import Animated, { FadeInUp, ZoomOut, LinearTransition, withSpring, useAnimatedStyle } from 'react-native-reanimated';
 
-import { getGrid, playMove, startGame, useJoker, finishGame } from '../src/api/game';
+import { getGrid, playMove, startGame, useJoker, finishGame, usePower } from '../src/api/game';
 import { getInventory } from '../src/api/market';
 import { loadSession } from '../src/utils/storage';
 import { generateGrid, generateLetter } from '../src/utils/grid';
@@ -270,6 +270,49 @@ export default function GameScreen() {
     }
   }
 
+  async function applyPower(row: number, col: number, powerType: string) {
+    if (!gameId) return;
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const response = await usePower({ game_id: gameId, row, col });
+
+      if (!response.grid) {
+        setErrorMessage('Power failed.');
+        return;
+      }
+
+      // Build list of affected cells for targeted animation
+      const size = grid.length;
+      let affectedCells: {row: number, col: number}[] = [];
+
+      if (powerType === 'row_clear') {
+        for (let c = 0; c < size; c++) affectedCells.push({ row, col: c });
+      } else if (powerType === 'column_clear') {
+        for (let r = 0; r < size; r++) affectedCells.push({ row: r, col });
+      } else if (powerType === 'area_bomb') {
+        for (let r = row - 1; r <= row + 1; r++) {
+          for (let c = col - 1; c <= col + 1; c++) {
+            if (r >= 0 && r < size && c >= 0 && c < size) affectedCells.push({ row: r, col: c });
+          }
+        }
+      } else if (powerType === 'mega_bomb') {
+        for (let r = row - 2; r <= row + 2; r++) {
+          for (let c = col - 2; c <= col + 2; c++) {
+            if (r >= 0 && r < size && c >= 0 && c < size) affectedCells.push({ row: r, col: c });
+          }
+        }
+      }
+
+      syncGrid(response.grid, affectedCells);
+      setPossibleWordCount(response.possible_word_count);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to activate power.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleJokerTap(jokerId: string) {
     if (activeJoker === jokerId) {
       setActiveJoker(null);
@@ -434,6 +477,30 @@ export default function GameScreen() {
           setScoreDelta(response.score_added ?? null);
           setComboScore(response.combo_score ?? null);
           setComboWords(response.combos ?? []);
+
+          // Animate power tiles that were triggered by this word
+          const triggeredPowers: { type: string; row: number; col: number }[] = (response as any).triggered_powers ?? [];
+          if (triggeredPowers.length > 0) {
+            const size = grid.length;
+            let allPowerCells: { row: number; col: number }[] = [];
+            for (const p of triggeredPowers) {
+              if (p.type === 'row_clear') {
+                for (let c = 0; c < size; c++) allPowerCells.push({ row: p.row, col: c });
+              } else if (p.type === 'column_clear') {
+                for (let r = 0; r < size; r++) allPowerCells.push({ row: r, col: p.col });
+              } else if (p.type === 'area_bomb') {
+                for (let r = p.row - 1; r <= p.row + 1; r++)
+                  for (let c = p.col - 1; c <= p.col + 1; c++)
+                    if (r >= 0 && r < size && c >= 0 && c < size) allPowerCells.push({ row: r, col: c });
+              } else if (p.type === 'mega_bomb') {
+                for (let r = p.row - 2; r <= p.row + 2; r++)
+                  for (let c = p.col - 2; c <= p.col + 2; c++)
+                    if (r >= 0 && r < size && c >= 0 && c < size) allPowerCells.push({ row: r, col: c });
+              }
+            }
+            // syncGrid already has the final server grid; replay animation with power cells
+            syncGrid(response.grid!, [...selectedPositions, ...allPowerCells]);
+          }
         }
 
         setErrorMessage(response.valid ? null : response.message ?? 'Word rejected.');
