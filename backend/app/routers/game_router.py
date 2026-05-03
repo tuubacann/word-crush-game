@@ -174,7 +174,7 @@ def play_move(data: dict = Body(...)):
         new_score = game["score"] + result["total_score"]
         special_power = create_special_power(len(result["word"]))
 
-        new_grid = process_move(game["grid"], positions, special_power)
+        new_grid, triggered_powers = process_move(game["grid"], positions, special_power)
         new_grid, possible_words = ensure_playable_grid(new_grid)
 
         new_found_word = {
@@ -217,7 +217,8 @@ def play_move(data: dict = Body(...)):
             "grid": new_grid,
             "possible_word_count": len(possible_words),
             "possible_words": possible_words,
-            "special_power_created": special_power
+            "special_power_created": special_power,
+            "triggered_powers": triggered_powers
         }
 
     grid, possible_words = ensure_playable_grid(game["grid"])

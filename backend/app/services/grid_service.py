@@ -195,6 +195,14 @@ def create_special_power(word_length):
 def process_move(grid, positions, special_power=None):
     last_row, last_col = positions[-1]
     last_letter = get_cell_letter(grid[last_row][last_col])
+    size = len(grid)
+
+    # Collect any power tiles in the selected word before clearing
+    triggered_powers = []
+    for row, col in positions:
+        cell = grid[row][col]
+        if isinstance(cell, dict) and cell.get("power"):
+            triggered_powers.append({"type": cell["power"], "row": row, "col": col})
 
     for row, col in positions:
         grid[row][col] = ""
@@ -208,10 +216,25 @@ def process_move(grid, positions, special_power=None):
     grid = drop_letters(grid)
     grid = fill_empty(grid)
 
-    if not has_possible_word(grid):
-        grid = generate_grid(len(grid))
+    # Apply triggered power effects (accumulated cells to clear)
+    power_cells_cleared = []
+    for power in triggered_powers:
+        cells = get_power_cells(power["row"], power["col"], size, power["type"])
+        power_cells_cleared.extend(cells)
 
-    return grid
+    if power_cells_cleared:
+        # Deduplicate
+        power_cells_cleared = list(set(power_cells_cleared))
+        for row, col in power_cells_cleared:
+            if 0 <= row < size and 0 <= col < size:
+                grid[row][col] = ""
+        grid = drop_letters(grid)
+        grid = fill_empty(grid)
+
+    if not has_possible_word(grid):
+        grid = generate_grid(size)
+
+    return grid, triggered_powers
 
 
 def clear_cells(grid, cells):

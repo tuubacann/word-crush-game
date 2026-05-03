@@ -85,3 +85,21 @@ export async function finishGame(gameId: string) {
   return response.data;
 }
 
+export type UsePowerPayload = {
+  game_id: string;
+  row: number;
+  col: number;
+};
+
+export type UsePowerResponse = {
+  message: string;
+  power_type: string;
+  grid: any[][];
+  possible_word_count: number;
+  possible_words: string[];
+};
+
+export async function usePower(payload: UsePowerPayload): Promise<UsePowerResponse> {
+  const response = await apiClient.post<UsePowerResponse>('/game/use-power', payload);
+  return response.data;
+}
