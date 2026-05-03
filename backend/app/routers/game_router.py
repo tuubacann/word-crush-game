@@ -7,7 +7,6 @@ from app.database import games_collection, scores_collection, users_collection
 from app.services.grid_service import (
     generate_grid,
     process_move,
-    find_words_on_grid,
     ensure_playable_grid,
     create_special_power,
     apply_joker,
@@ -49,6 +48,25 @@ def get_best_longest_word(found_words):
     )
 
 
+def save_final_score(game, total_score, found_words):
+    started_at = game.get("started_at", datetime.now())
+    duration_seconds = int((datetime.now() - started_at).total_seconds())
+    best_word = get_best_longest_word(found_words)
+
+    scores_collection.insert_one({
+        "user_id": game["user_id"],
+        "username": game.get("username", "unknown"),
+        "grid_size": game["grid_size"],
+        "total_score": total_score,
+        "word_count": len(found_words),
+        "longest_word": best_word["word"],
+        "longest_word_score": best_word["score"],
+        "duration_seconds": duration_seconds
+    })
+
+    return duration_seconds, best_word
+
+
 @router.get("/game/grid")
 def get_grid(size: int):
     grid = generate_grid(size)
@@ -74,15 +92,17 @@ def check_selected_word(letters: list[str] = Body(...)):
 def process_game_move(data: dict = Body(...)):
     grid = data["grid"]
     positions = data["positions"]
+    special_power = data.get("special_power")
 
-    new_grid = process_move(grid, positions)
+    new_grid = process_move(grid, positions, special_power)
     new_grid, possible_words = ensure_playable_grid(new_grid)
 
     return {
         "message": "Move processed",
         "grid": new_grid,
         "possible_word_count": len(possible_words),
-        "possible_words": possible_words
+        "possible_words": possible_words,
+        "special_power_created": special_power
     }
 
 
@@ -181,20 +201,7 @@ def play_move(data: dict = Body(...)):
         )
 
         if game_over:
-            started_at = game.get("started_at", datetime.now())
-            duration_seconds = int((datetime.now() - started_at).total_seconds())
-            best_word = get_best_longest_word(updated_found_words)
-
-            scores_collection.insert_one({
-                "user_id": game["user_id"],
-                "username": game.get("username", "unknown"),
-                "grid_size": game["grid_size"],
-                "total_score": new_score,
-                "word_count": len(updated_found_words),
-                "longest_word": best_word["word"],
-                "longest_word_score": best_word["score"],
-                "duration_seconds": duration_seconds
-            })
+            save_final_score(game, new_score, updated_found_words)
 
         return {
             "valid": True,
@@ -228,21 +235,8 @@ def play_move(data: dict = Body(...)):
     )
 
     if game_over:
-        started_at = game.get("started_at", datetime.now())
-        duration_seconds = int((datetime.now() - started_at).total_seconds())
         found_words = game.get("found_words", [])
-        best_word = get_best_longest_word(found_words)
-
-        scores_collection.insert_one({
-            "user_id": game["user_id"],
-            "username": game.get("username", "unknown"),
-            "grid_size": game["grid_size"],
-            "total_score": game["score"],
-            "word_count": len(found_words),
-            "longest_word": best_word["word"],
-            "longest_word_score": best_word["score"],
-            "duration_seconds": duration_seconds
-        })
+        save_final_score(game, game["score"], found_words)
 
     return {
         "valid": False,
@@ -269,22 +263,8 @@ def finish_game(data: dict = Body(...)):
     if game["status"] == "finished":
         return {"message": "Game already finished"}
 
-    started_at = game.get("started_at", datetime.now())
-    duration_seconds = int((datetime.now() - started_at).total_seconds())
-
     found_words = game.get("found_words", [])
-    best_word = get_best_longest_word(found_words)
-
-    scores_collection.insert_one({
-        "user_id": game["user_id"],
-        "username": game.get("username", "unknown"),
-        "grid_size": game["grid_size"],
-        "total_score": game["score"],
-        "word_count": len(found_words),
-        "longest_word": best_word["word"],
-        "longest_word_score": best_word["score"],
-        "duration_seconds": duration_seconds
-    })
+    duration_seconds, best_word = save_final_score(game, game["score"], found_words)
 
     games_collection.update_one(
         {"_id": ObjectId(game_id)},
@@ -342,7 +322,6 @@ def use_joker(data: dict = Body(...)):
             }
         }
     )
-
 
     user_jokers.remove(joker_id)
 

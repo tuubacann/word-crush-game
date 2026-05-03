@@ -9,8 +9,6 @@ TURKISH_LETTER_WEIGHTS = {
     "F": 1, "V": 1, "Ğ": 1, "J": 1, "Z": 1
 }
 
-LETTERS = list(TURKISH_LETTER_WEIGHTS.keys())
-
 _dictionary_cache = None
 _prefix_cache = None
 
@@ -19,6 +17,12 @@ def generate_letter():
     letters = list(TURKISH_LETTER_WEIGHTS.keys())
     weights = list(TURKISH_LETTER_WEIGHTS.values())
     return random.choices(letters, weights=weights, k=1)[0]
+
+
+def get_cell_letter(cell):
+    if isinstance(cell, dict):
+        return cell.get("letter", "")
+    return cell
 
 
 def get_neighbors(row, col, size):
@@ -133,6 +137,7 @@ def generate_grid(size: int):
 
     return generate_random_grid(size)
 
+
 def ensure_playable_grid(grid):
     possible_words = find_words_on_grid(grid)
 
@@ -174,23 +179,6 @@ def fill_empty(grid):
     return grid
 
 
-def process_move(grid, positions):
-    for row, col in positions:
-        grid[row][col] = ""
-
-    grid = drop_letters(grid)
-    grid = fill_empty(grid)
-
-    if not has_possible_word(grid):
-        grid = generate_grid(len(grid))
-
-    return grid
-def get_cell_letter(cell):
-    if isinstance(cell, dict):
-        return cell.get("letter", "")
-    return cell
-
-
 def create_special_power(word_length):
     if word_length == 4:
         return "row_clear"
@@ -200,7 +188,30 @@ def create_special_power(word_length):
         return "column_clear"
     if word_length >= 7:
         return "mega_bomb"
+
     return None
+
+
+def process_move(grid, positions, special_power=None):
+    last_row, last_col = positions[-1]
+    last_letter = get_cell_letter(grid[last_row][last_col])
+
+    for row, col in positions:
+        grid[row][col] = ""
+
+    if special_power:
+        grid[last_row][last_col] = {
+            "letter": last_letter,
+            "power": special_power
+        }
+
+    grid = drop_letters(grid)
+    grid = fill_empty(grid)
+
+    if not has_possible_word(grid):
+        grid = generate_grid(len(grid))
+
+    return grid
 
 
 def clear_cells(grid, cells):
@@ -267,28 +278,6 @@ def apply_power(grid, row, col):
     }
 
 
-def process_move(grid, positions, special_power=None):
-    last_row, last_col = positions[-1]
-    last_letter = get_cell_letter(grid[last_row][last_col])
-
-    for row, col in positions:
-        grid[row][col] = ""
-
-    if special_power:
-        grid[last_row][last_col] = {
-            "letter": last_letter,
-            "power": special_power
-        }
-
-    grid = drop_letters(grid)
-    grid = fill_empty(grid)
-
-    if not has_possible_word(grid):
-        grid = generate_grid(len(grid))
-
-    return grid
-
-
 def apply_joker(grid, joker_id, positions=None):
     size = len(grid)
 
@@ -341,6 +330,7 @@ def apply_joker(grid, joker_id, positions=None):
         random.shuffle(cells)
 
         index = 0
+
         for r in range(size):
             for c in range(size):
                 grid[r][c] = cells[index]
