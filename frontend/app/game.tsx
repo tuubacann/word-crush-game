@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, Image, Alert } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, Image, Alert, BackHandler } from 'react-native';
+import { router, useLocalSearchParams, useNavigation, Stack } from 'expo-router';
 import {
   GestureHandlerRootView,
   PanGestureHandler,
   State,
 } from 'react-native-gesture-handler';
-import Animated, { FadeInUp, ZoomOut, LinearTransition } from 'react-native-reanimated';
+import Animated, { FadeInUp, ZoomOut, LinearTransition, withSpring, useAnimatedStyle } from 'react-native-reanimated';
 
 import { getGrid, playMove, startGame, useJoker, finishGame } from '../src/api/game';
 import { getInventory } from '../src/api/market';
@@ -53,6 +53,8 @@ export default function GameScreen() {
   const [ownedJokers, setOwnedJokers] = useState<string[]>([]);
   const [activeJoker, setActiveJoker] = useState<string | null>(null);
   const [jokerPositions, setJokerPositions] = useState<{ row: number; col: number }[]>([]);
+
+  const navigation = useNavigation();
 
   const tileSize = useMemo(() => {
     const screenWidth = Dimensions.get('window').width;
@@ -419,10 +421,15 @@ export default function GameScreen() {
           }
         }
 
+        if (response.move_count !== undefined) {
+          setMoveCount(response.move_count);
+        }
+        if (response.possible_word_count !== undefined) {
+          setPossibleWordCount(response.possible_word_count);
+        }
+
         if (response.valid) {
           setScore(response.total_score ?? score);
-          setMoveCount(response.move_count ?? moveCount);
-          setPossibleWordCount(response.possible_word_count ?? possibleWordCount);
           setLastWord(response.word ?? null);
           setScoreDelta(response.score_added ?? null);
           setComboScore(response.combo_score ?? null);
@@ -433,7 +440,7 @@ export default function GameScreen() {
 
         if (response.game_over) {
           Alert.alert('Game Over', 'No more moves or possible words left! Your score has been saved.');
-          router.replace('/scores');
+          router.replace('/home');
         }
 
       } catch {
@@ -446,7 +453,7 @@ export default function GameScreen() {
     resetSelection();
   }
 
-  function handleExit() {
+  const handleExit = useCallback(() => {
     Alert.alert(
       'Exit Game',
       'Are you sure you want to exit? Your score will be saved and the game will end.',
@@ -464,12 +471,23 @@ export default function GameScreen() {
                 console.error(err);
               }
             }
-            router.replace('/scores');
+            router.replace('/home');
           }
         }
       ]
     );
-  }
+  }, [gameId]);
+
+  useEffect(() => {
+    const onBackPress = () => {
+      handleExit();
+      return true; // true prevents the default back action
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+    return () => subscription.remove();
+  }, [handleExit]);
 
   // Count instances of each joker
   const ownedCounts = useMemo(() => {
@@ -482,6 +500,16 @@ export default function GameScreen() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
+      <Stack.Screen 
+        options={{
+          headerLeft: () => (
+            <Pressable onPress={handleExit} style={{ paddingRight: 16 }}>
+              <Text style={{ color: '#15803d', fontSize: 16, fontWeight: '700' }}>Back</Text>
+            </Pressable>
+          ),
+          gestureEnabled: false,
+        }} 
+      />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Word Crush</Text>
 
@@ -503,7 +531,7 @@ export default function GameScreen() {
         {errorMessage && <Text style={styles.errorText}>{errorMessage}</Text>}
 
         {lastWord && (
-          <View style={styles.resultCard}>
+          <Animated.View key={`result-${moveCount}`} entering={FadeInUp.springify()} style={styles.resultCard}>
             <View style={styles.resultRow}>
               <Text style={styles.resultLabel}>Word</Text>
               <Text style={styles.resultValue}>{lastWord}</Text>
@@ -519,7 +547,7 @@ export default function GameScreen() {
                 Combos: {comboWords.join(', ')} (+{comboScore})
               </Text>
             )}
-          </View>
+          </Animated.View>
         )}
 
         {activeJoker && (
@@ -562,33 +590,14 @@ export default function GameScreen() {
                     const isSelected = selectedPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
                     const isJokerSelected = jokerPositions.some((pos) => pos.row === rowIndex && pos.col === colIndex);
                     
-                    const powerIcons: Record<string, string> = {
-                      row_clear: '⇆',
-                      area_bomb: '✹',
-                      column_clear: '⇅',
-                      mega_bomb: '✪'
-                    };
-
                     return (
-                      <Animated.View
+                      <Tile 
                         key={tileObj.id}
-                        layout={LinearTransition.springify().damping(16).stiffness(150)}
-                        entering={FadeInUp.springify()}
-                        exiting={ZoomOut}
-                        style={[
-                          styles.tile,
-                          { width: tileSize, height: tileSize },
-                          isSelected ? styles.tileSelected : null,
-                          isJokerSelected ? { backgroundColor: '#3b82f6', borderColor: '#2563eb' } : null,
-                        ]}
-                      >
-                        <Text style={[styles.tileText, isJokerSelected ? {color: '#fff'} : null]}>{tileObj.letter}</Text>
-                        {tileObj.power && (
-                          <Text style={{ position: 'absolute', bottom: 2, right: 2, fontSize: 12, color: '#be123c', fontWeight: '800' }}>
-                            {powerIcons[tileObj.power] ?? '*'}
-                          </Text>
-                        )}
-                      </Animated.View>
+                        tileObj={tileObj}
+                        isSelected={isSelected}
+                        isJokerSelected={isJokerSelected}
+                        tileSize={tileSize}
+                      />
                     );
                   })}
                 </View>
@@ -881,3 +890,51 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 });
+
+type TileProps = {
+  tileObj: TileObj;
+  isSelected: boolean;
+  isJokerSelected: boolean;
+  tileSize: number;
+};
+
+function Tile({ tileObj, isSelected, isJokerSelected, tileSize }: TileProps) {
+  const powerIcons: Record<string, string> = {
+    row_clear: '⇆',
+    area_bomb: '✹',
+    column_clear: '⇅',
+    mega_bomb: '✪'
+  };
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: withSpring(isSelected ? 1.05 : 1) }]
+    };
+  }, [isSelected]);
+
+  return (
+    <Animated.View
+      layout={LinearTransition.springify().damping(16).stiffness(150)}
+      entering={FadeInUp.springify()}
+      exiting={ZoomOut}
+      style={{ width: tileSize, height: tileSize }}
+    >
+      <Animated.View
+        style={[
+          styles.tile,
+          { width: '100%', height: '100%' },
+          isSelected ? styles.tileSelected : null,
+          isJokerSelected ? { backgroundColor: '#3b82f6', borderColor: '#2563eb' } : null,
+          animatedStyle,
+        ]}
+      >
+        <Text style={[styles.tileText, isJokerSelected ? {color: '#fff'} : null]}>{tileObj.letter}</Text>
+        {tileObj.power && (
+          <Text style={{ position: 'absolute', bottom: 2, right: 2, fontSize: 12, color: '#be123c', fontWeight: '800' }}>
+            {powerIcons[tileObj.power] ?? '*'}
+          </Text>
+        )}
+      </Animated.View>
+    </Animated.View>
+  );
+}
